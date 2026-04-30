@@ -1,0 +1,1810 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { toPng } from "html-to-image";
+import jsPDF from "jspdf";
+import type { LucideIcon } from "lucide-react";
+import {
+  AlertTriangle,
+  Beaker,
+  BookOpen,
+  Brush,
+  CheckCircle2,
+  Contrast,
+  Copy,
+  Download,
+  Droplets,
+  FileJson,
+  FileText,
+  FlaskConical,
+  Gem,
+  Image as ImageIcon,
+  Layers,
+  Moon,
+  Palette,
+  PaintBucket,
+  Pipette,
+  Plus,
+  RotateCw,
+  Save,
+  Search,
+  Settings,
+  ShieldCheck,
+  SlidersHorizontal,
+  Snowflake,
+  Sparkles,
+  SprayCan,
+  Sun,
+  ThermometerSun,
+  Trash2,
+  Upload,
+  WandSparkles,
+  Wrench,
+} from "lucide-react";
+import rawDatabase from "./data/paintDatabase.json";
+import {
+  adjustHsl,
+  applyPrimer,
+  findCalibration,
+  getComplement,
+  getVariations,
+  hexToRgb,
+  hslToRgb,
+  makeCalibrationKey,
+  mixColors,
+  normalizeHex,
+  readableTextColor,
+  rgbToHex,
+  rgbToHsl,
+  type MixMode,
+} from "./lib/color";
+import type { Calibration, ColorEntry, MixerColor, PaintDatabase, Palette as PaletteData, Recipe, SavedRecipe } from "./types";
+
+type SectionId =
+  | "mixer"
+  | "recipes"
+  | "techniques"
+  | "paintTypes"
+  | "resin"
+  | "palettes"
+  | "problems"
+  | "mine"
+  | "settings";
+
+type HistoryItem = {
+  id: string;
+  hex: string;
+  calibratedHex?: string;
+  mode: MixMode;
+  createdAt: string;
+  label: string;
+};
+
+const seedDatabase = rawDatabase as unknown as PaintDatabase;
+
+const storageKeys = {
+  db: "solitario.color3d.database",
+  saved: "solitario.color3d.savedRecipes",
+  calibrations: "solitario.color3d.calibrations",
+  history: "solitario.color3d.history",
+  checklist: "solitario.color3d.resinChecklist",
+  theme: "solitario.color3d.theme",
+};
+
+const sections: Array<{ id: SectionId; label: string; icon: LucideIcon }> = [
+  { id: "mixer", label: "Misturador de Cores", icon: FlaskConical },
+  { id: "recipes", label: "Receitas Prontas", icon: BookOpen },
+  { id: "techniques", label: "Técnicas de Pintura", icon: Brush },
+  { id: "paintTypes", label: "Tipos de Tinta e Efeitos", icon: PaintBucket },
+  { id: "resin", label: "Fluxo para Resina 3D", icon: ShieldCheck },
+  { id: "palettes", label: "Biblioteca de Paletas", icon: Palette },
+  { id: "problems", label: "Problemas e Soluções", icon: Wrench },
+  { id: "mine", label: "Minhas Receitas", icon: Save },
+  { id: "settings", label: "Configurações / Calibração", icon: Settings },
+];
+
+const primerOptions = [
+  { id: "preto", label: "Preto", hex: "#050505" },
+  { id: "branco", label: "Branco", hex: "#f8fafc" },
+  { id: "cinza", label: "Cinza", hex: "#737373" },
+  { id: "zenithal", label: "Zenithal preto/branco", hex: "#a8a29e" },
+  { id: "prata", label: "Prata metálico", hex: "#c0c7cf" },
+  { id: "dourado", label: "Dourado metálico", hex: "#d4a72c" },
+  { id: "marrom", label: "Marrom", hex: "#4b2b1a" },
+  { id: "custom", label: "Cor personalizada", hex: "#64748b" },
+];
+
+const opacityOptions = ["opaco", "semi-opaco", "translúcido", "transparente"];
+const finishOptions = ["fosco", "acetinado", "brilhante", "gloss intenso", "metálico", "perolado", "candy", "fluorescente", "interference / color shift"];
+const paintInputTypes = ["acrílica", "ink", "wash", "contrast", "speedpaint", "óleo", "enamel", "laca", "metálica", "fluorescente", "candy", "transparente"];
+const paletteTypes = [
+  "monocromática",
+  "complementar",
+  "complementar dividida",
+  "análoga",
+  "triádica",
+  "tétrade",
+  "quente",
+  "fria",
+  "grimdark",
+  "pastel",
+  "neon",
+  "naturalista",
+  "alto contraste",
+  "baixo contraste",
+  "fantasia",
+  "sci-fi",
+  "horror",
+  "militar",
+  "anime",
+  "realista",
+  "cel shading",
+];
+
+const techniqueFilters = [
+  "iniciante",
+  "intermediário",
+  "avançado",
+  "pincel",
+  "airbrush",
+  "speedpaint",
+  "busto",
+  "miniatura RPG",
+  "veículo",
+  "diorama",
+  "metal",
+  "pele",
+  "tecido",
+  "monstro",
+  "efeito mágico",
+  "weathering",
+];
+
+const cx = (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(" ");
+
+const normalizeText = (value: string) =>
+  value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
+
+function useLocalStorage<T>(key: string, initialValue: T) {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const stored = window.localStorage.getItem(key);
+      return stored ? (JSON.parse(stored) as T) : initialValue;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  }, [key, value]);
+
+  return [value, setValue] as const;
+}
+
+const downloadBlob = (filename: string, content: BlobPart, type: string) => {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+};
+
+const copyToClipboard = async (text: string) => {
+  await navigator.clipboard?.writeText(text);
+};
+
+const createMixerColor = (color: ColorEntry, parts = 1): MixerColor => ({
+  id: crypto.randomUUID(),
+  sourceId: color.id,
+  name: color.name,
+  hex: color.hex,
+  parts,
+  paintType: color.finish === "metálico" ? "metálica" : "acrílica",
+  opacity: color.opacity,
+  finish: color.finish,
+});
+
+const createCustomMixerColor = (name: string, hex: string, parts = 1): MixerColor => ({
+  id: crypto.randomUUID(),
+  name,
+  hex: normalizeHex(hex),
+  parts,
+  paintType: "acrílica",
+  opacity: "semi-opaco",
+  finish: "fosco",
+});
+
+const findColorForMix = (database: PaintDatabase, colorName: string, fallbackHex: string) => {
+  const normalized = normalizeText(colorName);
+  return (
+    database.colors.find((color) => normalizeText(color.id) === normalized) ??
+    database.colors.find((color) => normalizeText(color.name) === normalized) ??
+    database.colors.find((color) => normalized.includes(normalizeText(color.family)) || normalizeText(color.name).includes(normalized.split(" ")[0])) ??
+    null
+  ) ?? createCustomMixerColor(colorName, fallbackHex);
+};
+
+const paletteFromBase = (type: string, baseHex: string): PaletteData => {
+  const baseHsl = rgbToHsl(hexToRgb(baseHex));
+  const make = (h: number, s = baseHsl.s, l = baseHsl.l) => rgbToHex(hslToRgb({ h: (h + 360) % 360, s, l }));
+  const low = Math.max(14, baseHsl.l - 28);
+  const high = Math.min(92, baseHsl.l + 28);
+  const recipes: Record<string, string[]> = {
+    "monocromática": [make(baseHsl.h), make(baseHsl.h, baseHsl.s - 16, low + 10), make(baseHsl.h, baseHsl.s + 8, low), make(baseHsl.h, baseHsl.s - 12, high), make(baseHsl.h, baseHsl.s + 18, high - 12), make(baseHsl.h, baseHsl.s - 35, 52), "#5b5146"],
+    complementar: [make(baseHsl.h), make(baseHsl.h + 180), make(baseHsl.h, baseHsl.s, low), make(baseHsl.h, baseHsl.s - 8, high), make(baseHsl.h + 180, baseHsl.s + 8, 46), make(baseHsl.h + 180, 80, 62), "#6b5f4a"],
+    "complementar dividida": [make(baseHsl.h), make(baseHsl.h + 150), make(baseHsl.h, baseHsl.s, low), make(baseHsl.h, baseHsl.s - 10, high), make(baseHsl.h + 210), make(baseHsl.h + 30, 75, 58), "#5f6368"],
+    "análoga": [make(baseHsl.h), make(baseHsl.h + 32), make(baseHsl.h - 24, baseHsl.s, low), make(baseHsl.h + 12, baseHsl.s - 8, high), make(baseHsl.h - 42), make(baseHsl.h + 180, 65, 55), "#556b2f"],
+    "triádica": [make(baseHsl.h), make(baseHsl.h + 120), make(baseHsl.h, baseHsl.s, low), make(baseHsl.h, baseHsl.s - 8, high), make(baseHsl.h + 240), make(baseHsl.h + 60, 80, 58), "#737373"],
+    tétrade: [make(baseHsl.h), make(baseHsl.h + 90), make(baseHsl.h + 180, baseHsl.s, low), make(baseHsl.h, baseHsl.s - 8, high), make(baseHsl.h + 270), make(baseHsl.h + 45, 78, 56), "#4b5563"],
+  };
+
+  const themed: Record<string, string[]> = {
+    quente: ["#d71920", "#f97316", "#5c1b17", "#ffd21f", "#d4a72c", "#06b6d4", "#7c3f20"],
+    fria: ["#2563eb", "#2dd4bf", "#0f172a", "#b9ecff", "#6d28d9", "#f97316", "#475569"],
+    grimdark: ["#101622", "#4b5563", "#050505", "#94a3b8", "#7f1d1d", "#d4a72c", "#5f6368"],
+    pastel: ["#f7c7d9", "#b9ecff", "#a78bfa", "#ffffff", "#f2e7c9", "#2dd4bf", "#d4d4d4"],
+    neon: ["#111827", "#6d28d9", "#020617", "#00d5ff", "#39ff14", "#c026d3", "#3f3f46"],
+    naturalista: ["#556b2f", "#7c3f20", "#25351f", "#a3a36f", "#b7791f", "#d6b98c", "#3f2414"],
+    "alto contraste": ["#050505", "#f8fafc", "#111827", "#ffffff", baseHex, getComplement(baseHex), "#737373"],
+    "baixo contraste": [make(baseHsl.h, 35, 48), make(baseHsl.h + 24, 30, 54), make(baseHsl.h, 25, 34), make(baseHsl.h, 22, 68), make(baseHsl.h - 18, 38, 56), make(baseHsl.h + 80, 30, 55), "#77716a"],
+    fantasia: ["#6d28d9", "#d4a72c", "#150b2b", "#f2e7c9", "#2dd4bf", "#d71920", "#556b2f"],
+    "sci-fi": ["#e5e7eb", "#1f2937", "#0f172a", "#ffffff", "#ef4444", "#00d5ff", "#475569"],
+    horror: ["#6b2f2a", "#4f2d22", "#1c0f0c", "#d6b98c", "#8f0711", "#39ff14", "#3f2414"],
+    militar: ["#556b2f", "#7c6a46", "#2f3324", "#a3a36f", "#5b6168", "#b7791f", "#8a6f3f"],
+    anime: ["#f97316", "#2563eb", "#7f1d1d", "#fff7ad", "#050505", "#f8fafc", "#737373"],
+    realista: ["#7c3f20", "#556b2f", "#2f241e", "#d6b98c", "#5b6168", "#b7791f", "#6b5f4a"],
+    "cel shading": ["#f97316", "#2563eb", "#7f1d1d", "#fff7ad", "#050505", "#f8fafc", "#737373"],
+  };
+
+  const values = recipes[type] ?? themed[type] ?? recipes.complementar;
+  return {
+    id: `gerada-${type}`,
+    name: `Paleta ${type}`,
+    type,
+    colors: {
+      principal: values[0],
+      secundaria: values[1],
+      sombra: values[2],
+      highlight: values[3],
+      detalhe: values[4],
+      contraste: values[5],
+      base: values[6],
+    },
+    varnish: type.includes("candy") || type === "sci-fi" ? "satin com gloss seletivo" : "fosco com brilho seletivo quando necessário",
+    techniques: type === "grimdark" ? ["wash", "streaking grime", "edge highlight", "pigmentos"] : ["basecoat", "glaze", "highlight", "verniz seletivo"],
+  };
+};
+
+function FieldLabel({ children }: { children: string }) {
+  return <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{children}</label>;
+}
+
+function IconButton({
+  icon: Icon,
+  label,
+  onClick,
+  active,
+  type = "button",
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick?: () => void;
+  active?: boolean;
+  type?: "button" | "submit";
+}) {
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      title={label}
+      className={cx(
+        "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold transition",
+        active
+          ? "border-teal-400 bg-teal-500 text-slate-950 shadow-glow"
+          : "border-slate-300 bg-white text-slate-700 hover:border-teal-400 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-teal-400",
+      )}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
+function ColorSwatch({ hex, label, large = false }: { hex: string; label?: string; large?: boolean }) {
+  return (
+    <div
+      className={cx("flex items-end rounded-lg border border-white/20 p-2 shadow-inner", large ? "h-32 min-h-32" : "h-20")}
+      style={{ background: hex, color: readableTextColor(hex) }}
+      title={`${label ?? "cor"} ${hex}`}
+    >
+      <div className="min-w-0">
+        {label ? <div className="truncate text-xs font-bold">{label}</div> : null}
+        <div className="font-mono text-xs font-semibold uppercase">{hex}</div>
+      </div>
+    </div>
+  );
+}
+
+function SectionTitle({ icon: Icon, title, subtitle }: { icon: LucideIcon; title: string; subtitle?: string }) {
+  return (
+    <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-500 text-slate-950">
+            <Icon className="h-5 w-5" />
+          </span>
+          <h2 className="text-2xl font-black tracking-tight text-slate-950 dark:text-white">{title}</h2>
+        </div>
+        {subtitle ? <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600 dark:text-slate-300">{subtitle}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function DataCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <article className={cx("rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900", className)}>{children}</article>;
+}
+
+function App() {
+  const [database, setDatabase] = useLocalStorage<PaintDatabase>(storageKeys.db, seedDatabase);
+  const [savedRecipes, setSavedRecipes] = useLocalStorage<SavedRecipe[]>(storageKeys.saved, []);
+  const [calibrations, setCalibrations] = useLocalStorage<Calibration[]>(storageKeys.calibrations, []);
+  const [history, setHistory] = useLocalStorage<HistoryItem[]>(storageKeys.history, []);
+  const [checklist, setChecklist] = useLocalStorage<Record<string, boolean>>(storageKeys.checklist, {});
+  const [theme, setTheme] = useLocalStorage<"dark" | "light">(storageKeys.theme, "dark");
+  const [section, setSection] = useState<SectionId>("mixer");
+  const [mixMode, setMixMode] = useState<MixMode>("perceptual");
+  const [primerId, setPrimerId] = useState("cinza");
+  const [customPrimer, setCustomPrimer] = useState("#64748b");
+  const [mixerOpacity, setMixerOpacity] = useState("semi-opaco");
+  const [mixerFinish, setMixerFinish] = useState("fosco");
+  const [recipeSearch, setRecipeSearch] = useState("");
+  const [techniqueSearch, setTechniqueSearch] = useState("");
+  const [activeTechniqueFilter, setActiveTechniqueFilter] = useState("todos");
+  const [paintSearch, setPaintSearch] = useState("");
+  const [problemSearch, setProblemSearch] = useState("");
+  const [quickPreview, setQuickPreview] = useState<{ label: string; hex: string } | null>(null);
+  const [paletteType, setPaletteType] = useState("complementar");
+  const [paletteBase, setPaletteBase] = useState("#6d28d9");
+  const exportRef = useRef<HTMLDivElement>(null);
+
+  const [mixerColors, setMixerColors] = useState<MixerColor[]>(() => [
+    createMixerColor(seedDatabase.colors.find((color) => color.id === "vermelho-vivo") ?? seedDatabase.colors[0], 3),
+    createMixerColor(seedDatabase.colors.find((color) => color.id === "amarelo-vivo") ?? seedDatabase.colors[1], 1),
+    createMixerColor(seedDatabase.colors.find((color) => color.id === "branco") ?? seedDatabase.colors[2], 0.5),
+  ]);
+
+  const currentPrimer = primerOptions.find((primer) => primer.id === primerId) ?? primerOptions[2];
+  const primerHex = primerId === "custom" ? normalizeHex(customPrimer) : currentPrimer.hex;
+  const predictedHex = useMemo(() => mixColors(mixerColors, mixMode), [mixerColors, mixMode]);
+  const matchedCalibration = useMemo(() => findCalibration(mixerColors, calibrations), [mixerColors, calibrations]);
+  const [manualCalibratedHex, setManualCalibratedHex] = useState(predictedHex);
+  const calibratedHex = normalizeHex(matchedCalibration?.estimatedHex ?? manualCalibratedHex);
+  const variations = useMemo(() => getVariations(predictedHex), [predictedHex]);
+  const generatedPalette = useMemo(() => paletteFromBase(paletteType, paletteBase), [paletteType, paletteBase]);
+
+  const [calibrationDraft, setCalibrationDraft] = useState({
+    brand: "Genérica",
+    line: "Linha acrílica hobby",
+    colorName: "Amostra real",
+    estimatedHex: predictedHex,
+    opacity: mixerOpacity,
+    finish: mixerFinish,
+    primer: currentPrimer.label,
+    layers: 2,
+    dilution: "1 parte tinta + 1 parte água/medium",
+    photoName: "",
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+  }, [theme]);
+
+  useEffect(() => {
+    setManualCalibratedHex(matchedCalibration?.estimatedHex ?? predictedHex);
+    setCalibrationDraft((draft) => ({
+      ...draft,
+      estimatedHex: matchedCalibration?.estimatedHex ?? predictedHex,
+      opacity: mixerOpacity,
+      finish: mixerFinish,
+      primer: currentPrimer.label,
+    }));
+  }, [predictedHex, matchedCalibration?.estimatedHex, mixerOpacity, mixerFinish, currentPrimer.label]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const sourceKey = makeCalibrationKey(mixerColors);
+      setHistory((items) => {
+        const next: HistoryItem = {
+          id: `${sourceKey}-${mixMode}`,
+          hex: predictedHex,
+          calibratedHex: matchedCalibration?.estimatedHex,
+          mode: mixMode,
+          createdAt: new Date().toISOString(),
+          label: mixerColors
+            .filter((color) => color.parts > 0)
+            .map((color) => `${color.parts} ${color.name}`)
+            .join(" + "),
+        };
+        return [next, ...items.filter((item) => item.id !== next.id)].slice(0, 8);
+      });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [mixerColors, mixMode, predictedHex, matchedCalibration?.estimatedHex, setHistory]);
+
+  const recipeResults = useMemo(() => {
+    const term = normalizeText(recipeSearch);
+    return database.recipes.filter((recipe) => {
+      const body = normalizeText(`${recipe.name} ${recipe.primer} ${recipe.shade} ${recipe.highlight} ${recipe.techniques.join(" ")}`);
+      return body.includes(term);
+    });
+  }, [database.recipes, recipeSearch]);
+
+  const techniqueResults = useMemo(() => {
+    const term = normalizeText(techniqueSearch);
+    return database.techniques.filter((technique) => {
+      const body = normalizeText(`${technique.name} ${technique.difficulty} ${technique.tags.join(" ")} ${technique.purpose} ${technique.uses.join(" ")}`);
+      const matchesSearch = body.includes(term);
+      const matchesFilter =
+        activeTechniqueFilter === "todos" ||
+        technique.difficulty === activeTechniqueFilter ||
+        technique.tags.some((tag) => normalizeText(tag) === normalizeText(activeTechniqueFilter));
+      return matchesSearch && matchesFilter;
+    });
+  }, [activeTechniqueFilter, database.techniques, techniqueSearch]);
+
+  const paintTypeResults = useMemo(() => {
+    const term = normalizeText(paintSearch);
+    return database.paintTypes.filter((paintType) => normalizeText(`${paintType.name} ${paintType.description} ${paintType.bestUse.join(" ")}`).includes(term));
+  }, [database.paintTypes, paintSearch]);
+
+  const problemResults = useMemo(() => {
+    const term = normalizeText(problemSearch);
+    return database.problems.filter((problem) => normalizeText(`${problem.problem} ${problem.causes.join(" ")} ${problem.solution.join(" ")}`).includes(term));
+  }, [database.problems, problemSearch]);
+
+  const updateMixerColor = (id: string, patch: Partial<MixerColor>) => {
+    setMixerColors((colors) => colors.map((color) => (color.id === id ? { ...color, ...patch } : color)));
+  };
+
+  const addMixerColor = () => {
+    if (mixerColors.length >= 5) return;
+    const next = database.colors[mixerColors.length % database.colors.length];
+    setMixerColors((colors) => [...colors, createMixerColor(next, 1)]);
+  };
+
+  const removeMixerColor = (id: string) => {
+    setMixerColors((colors) => (colors.length <= 1 ? colors : colors.filter((color) => color.id !== id)));
+  };
+
+  const useRecipeInMixer = (recipe: Recipe, adaptation?: string) => {
+    const mapped = recipe.mix.slice(0, 5).map((part) => {
+      const match = findColorForMix(database, part.color, recipe.targetHex);
+      return "sourceId" in match || "family" in match
+        ? createMixerColor(match as ColorEntry, part.parts)
+        : {
+            ...(match as MixerColor),
+            id: crypto.randomUUID(),
+            parts: part.parts,
+          };
+    });
+    setMixerColors(mapped.length ? mapped : [createCustomMixerColor(recipe.name, recipe.targetHex, 1)]);
+    setMixerOpacity(adaptation?.includes("airbrush") ? "translúcido" : "semi-opaco");
+    setMixerFinish(recipe.finish);
+    setPrimerId(recipe.primer.includes("preto") ? "preto" : recipe.primer.includes("branco") ? "branco" : "cinza");
+    setQuickPreview({ label: adaptation ? `${recipe.name} (${adaptation})` : recipe.name, hex: recipe.targetHex });
+    setSection("mixer");
+  };
+
+  const saveRecipe = (recipe?: Recipe) => {
+    if (recipe) {
+      const saved: SavedRecipe = {
+        id: crypto.randomUUID(),
+        name: recipe.name,
+        createdAt: new Date().toISOString(),
+        colors: recipe.mix.map((part) => {
+          const match = findColorForMix(database, part.color, recipe.targetHex);
+          return "sourceId" in match || "family" in match ? createMixerColor(match as ColorEntry, part.parts) : ({ ...(match as MixerColor), parts: part.parts } as MixerColor);
+        }),
+        resultHex: recipe.targetHex,
+        primer: recipe.primer,
+        opacity: "semi-opaco",
+        finish: recipe.finish,
+        notes: `${recipe.shade}. Highlight: ${recipe.highlight}. ${recipe.observations ?? ""}`,
+      };
+      setSavedRecipes((items) => [saved, ...items]);
+      return;
+    }
+
+    const name = window.prompt("Nome da receita", `Mistura ${new Date().toLocaleDateString("pt-BR")}`);
+    if (!name) return;
+    const saved: SavedRecipe = {
+      id: crypto.randomUUID(),
+      name,
+      createdAt: new Date().toISOString(),
+      colors: mixerColors,
+      resultHex: predictedHex,
+      calibratedHex,
+      primer: currentPrimer.label,
+      opacity: mixerOpacity,
+      finish: mixerFinish,
+      notes: "Resultado aproximado. Testar em paleta, colher plástica, suporte de resina ou peça de descarte.",
+    };
+    setSavedRecipes((items) => [saved, ...items]);
+  };
+
+  const duplicateMixer = () => {
+    setMixerColors((colors) => colors.map((color) => ({ ...color, id: crypto.randomUUID() })));
+    setQuickPreview({ label: "Mistura duplicada", hex: calibratedHex });
+  };
+
+  const applyQuickAction = (label: string, hex: string) => {
+    setQuickPreview({ label, hex });
+  };
+
+  const addComplement = () => {
+    if (mixerColors.length >= 5) return;
+    setMixerColors((colors) => [...colors, createCustomMixerColor("Complementar", getComplement(predictedHex), 0.25)]);
+    setMixMode("subtractive");
+  };
+
+  const transformMedium = (kind: "wash" | "glaze" | "candy" | "airbrush") => {
+    const settings = {
+      wash: { opacity: "transparente", finish: "fosco", label: "Wash gerado" },
+      glaze: { opacity: "translúcido", finish: "acetinado", label: "Glaze gerado" },
+      candy: { opacity: "transparente", finish: "candy", label: "Candy gerado" },
+      airbrush: { opacity: "semi-opaco", finish: "acetinado", label: "Versão para airbrush" },
+    }[kind];
+    setMixerOpacity(settings.opacity);
+    setMixerFinish(settings.finish);
+    setQuickPreview({ label: settings.label, hex: kind === "wash" ? variations.shadow : kind === "glaze" ? adjustHsl(predictedHex, { s: rgbToHsl(hexToRgb(predictedHex)).s - 8 }) : predictedHex });
+  };
+
+  const exportCurrentJson = () => {
+    const payload = {
+      name: "Receita do Misturador",
+      mode: mixMode,
+      colors: mixerColors,
+      primer: currentPrimer.label,
+      predictedHex,
+      calibratedHex,
+      opacity: mixerOpacity,
+      finish: mixerFinish,
+      warning: "Resultado aproximado. Faça teste antes de aplicar no modelo final.",
+    };
+    downloadBlob("receita-solitario-cores-3d.json", JSON.stringify(payload, null, 2), "application/json");
+  };
+
+  const exportCurrentPdf = () => {
+    const doc = new jsPDF();
+    const predicted = hexToRgb(predictedHex);
+    const calibrated = hexToRgb(calibratedHex);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.text("Solitario - Painel de Cores 3D", 16, 18);
+    doc.setFontSize(12);
+    doc.text("Receita de mistura", 16, 30);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Modo: ${mixMode}`, 16, 42);
+    doc.text(`Primer: ${currentPrimer.label}`, 16, 50);
+    doc.text(`Opacidade: ${mixerOpacity} | Acabamento: ${mixerFinish}`, 16, 58);
+    doc.setFillColor(predicted.r, predicted.g, predicted.b);
+    doc.rect(16, 68, 46, 26, "F");
+    doc.setFillColor(calibrated.r, calibrated.g, calibrated.b);
+    doc.rect(70, 68, 46, 26, "F");
+    doc.text(`Previsto: ${predictedHex}`, 16, 102);
+    doc.text(`Calibrado: ${calibratedHex}`, 70, 102);
+    mixerColors.forEach((color, index) => {
+      doc.text(`${index + 1}. ${color.parts} partes - ${color.name} (${color.hex})`, 16, 118 + index * 8);
+    });
+    doc.setFontSize(9);
+    doc.text("Resultado aproximado. Faça teste em paleta, suporte de resina ou peça de descarte antes do modelo final.", 16, 170, { maxWidth: 178 });
+    doc.save("receita-solitario-cores-3d.pdf");
+  };
+
+  const exportCurrentPng = async () => {
+    if (!exportRef.current) return;
+    const dataUrl = await toPng(exportRef.current, { pixelRatio: 2, backgroundColor: theme === "dark" ? "#0f172a" : "#ffffff" });
+    const link = document.createElement("a");
+    link.download = "receita-solitario-cores-3d.png";
+    link.href = dataUrl;
+    link.click();
+  };
+
+  const exportDatabase = () => {
+    downloadBlob("banco-solitario-cores-3d.json", JSON.stringify(database, null, 2), "application/json");
+  };
+
+  const importDatabase = async (file?: File) => {
+    if (!file) return;
+    const parsed = JSON.parse(await file.text()) as PaintDatabase;
+    if (!Array.isArray(parsed.colors) || !Array.isArray(parsed.recipes) || !Array.isArray(parsed.techniques)) {
+      window.alert("O arquivo não parece ser um banco válido.");
+      return;
+    }
+    setDatabase(parsed);
+  };
+
+  const saveCalibration = () => {
+    const calibration: Calibration = {
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      sourceKey: makeCalibrationKey(mixerColors),
+      ...calibrationDraft,
+      estimatedHex: normalizeHex(calibrationDraft.estimatedHex),
+    };
+    setCalibrations((items) => [calibration, ...items]);
+    setManualCalibratedHex(calibration.estimatedHex);
+  };
+
+  const renderSection = () => {
+    switch (section) {
+      case "mixer":
+        return (
+          <MixerSection
+            database={database}
+            mixerColors={mixerColors}
+            updateMixerColor={updateMixerColor}
+            removeMixerColor={removeMixerColor}
+            addMixerColor={addMixerColor}
+            mixMode={mixMode}
+            setMixMode={setMixMode}
+            predictedHex={predictedHex}
+            calibratedHex={calibratedHex}
+            setManualCalibratedHex={setManualCalibratedHex}
+            matchedCalibration={matchedCalibration}
+            primerId={primerId}
+            setPrimerId={setPrimerId}
+            primerHex={primerHex}
+            customPrimer={customPrimer}
+            setCustomPrimer={setCustomPrimer}
+            mixerOpacity={mixerOpacity}
+            setMixerOpacity={setMixerOpacity}
+            mixerFinish={mixerFinish}
+            setMixerFinish={setMixerFinish}
+            variations={variations}
+            quickPreview={quickPreview}
+            history={history}
+            saveRecipe={() => saveRecipe()}
+            duplicateMixer={duplicateMixer}
+            exportCurrentJson={exportCurrentJson}
+            exportCurrentPdf={exportCurrentPdf}
+            exportCurrentPng={exportCurrentPng}
+            addComplement={addComplement}
+            applyQuickAction={applyQuickAction}
+            transformMedium={transformMedium}
+            setPaletteBase={setPaletteBase}
+            setSection={setSection}
+            exportRef={exportRef}
+          />
+        );
+      case "recipes":
+        return (
+          <RecipesSection
+            recipes={recipeResults}
+            search={recipeSearch}
+            setSearch={setRecipeSearch}
+            useRecipeInMixer={useRecipeInMixer}
+            saveRecipe={saveRecipe}
+          />
+        );
+      case "techniques":
+        return (
+          <TechniquesSection
+            techniques={techniqueResults}
+            search={techniqueSearch}
+            setSearch={setTechniqueSearch}
+            activeFilter={activeTechniqueFilter}
+            setActiveFilter={setActiveTechniqueFilter}
+          />
+        );
+      case "paintTypes":
+        return <PaintTypesSection paintTypes={paintTypeResults} search={paintSearch} setSearch={setPaintSearch} />;
+      case "resin":
+        return <ResinSection database={database} checklist={checklist} setChecklist={setChecklist} />;
+      case "palettes":
+        return <PalettesSection palettes={database.palettes} generatedPalette={generatedPalette} paletteType={paletteType} setPaletteType={setPaletteType} paletteBase={paletteBase} setPaletteBase={setPaletteBase} />;
+      case "problems":
+        return <ProblemsSection problems={problemResults} search={problemSearch} setSearch={setProblemSearch} safety={database.safety} />;
+      case "mine":
+        return <MineSection savedRecipes={savedRecipes} setSavedRecipes={setSavedRecipes} useSavedInMixer={(saved) => {
+          setMixerColors(saved.colors.map((color) => ({ ...color, id: crypto.randomUUID() })));
+          setMixerOpacity(saved.opacity);
+          setMixerFinish(saved.finish);
+          setQuickPreview({ label: saved.name, hex: saved.calibratedHex ?? saved.resultHex });
+          setSection("mixer");
+        }} />;
+      case "settings":
+        return (
+          <SettingsSection
+            theme={theme}
+            setTheme={setTheme}
+            database={database}
+            exportDatabase={exportDatabase}
+            importDatabase={importDatabase}
+            calibrationDraft={calibrationDraft}
+            setCalibrationDraft={setCalibrationDraft}
+            saveCalibration={saveCalibration}
+            calibrations={calibrations}
+            setCalibrations={setCalibrations}
+            currentKey={makeCalibrationKey(mixerColors)}
+          />
+        );
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-100 text-slate-950 dark:bg-slate-950 dark:text-slate-100">
+      <div className="mx-auto flex w-full max-w-[1800px] flex-col lg:flex-row">
+        <aside className="no-print sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-3 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 lg:h-screen lg:w-80 lg:border-b-0 lg:border-r lg:px-4 lg:py-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-widest text-teal-600 dark:text-teal-300">Solitario</p>
+              <h1 className="truncate text-lg font-black leading-tight text-slate-950 dark:text-white">Painel de Cores 3D</h1>
+            </div>
+            <button
+              type="button"
+              title="Alternar tema"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            >
+              {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            </button>
+          </div>
+          <nav className="flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible">
+            {sections.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setSection(item.id)}
+                  className={cx(
+                    "flex min-h-11 shrink-0 items-center gap-3 rounded-lg px-3 text-left text-sm font-semibold transition lg:w-full",
+                    section === item.id
+                      ? "bg-teal-500 text-slate-950 shadow-glow"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white",
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="whitespace-nowrap lg:whitespace-normal">{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="mt-5 hidden rounded-lg border border-amber-300/50 bg-amber-100 p-3 text-xs leading-5 text-amber-950 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100 lg:block">
+            <div className="mb-1 flex items-center gap-2 font-bold">
+              <AlertTriangle className="h-4 w-4" />
+              Mistura real é aproximada
+            </div>
+            Pigmento, primer, cobertura, diluição, camadas, acabamento, luz e cor de base mudam o resultado final.
+          </div>
+        </aside>
+
+        <main className="flex-1 px-4 py-5 sm:px-6 lg:px-8 lg:py-8">{renderSection()}</main>
+      </div>
+    </div>
+  );
+}
+
+function MixerSection(props: {
+  database: PaintDatabase;
+  mixerColors: MixerColor[];
+  updateMixerColor: (id: string, patch: Partial<MixerColor>) => void;
+  removeMixerColor: (id: string) => void;
+  addMixerColor: () => void;
+  mixMode: MixMode;
+  setMixMode: (mode: MixMode) => void;
+  predictedHex: string;
+  calibratedHex: string;
+  setManualCalibratedHex: (hex: string) => void;
+  matchedCalibration?: Calibration;
+  primerId: string;
+  setPrimerId: (id: string) => void;
+  primerHex: string;
+  customPrimer: string;
+  setCustomPrimer: (hex: string) => void;
+  mixerOpacity: string;
+  setMixerOpacity: (value: string) => void;
+  mixerFinish: string;
+  setMixerFinish: (value: string) => void;
+  variations: ReturnType<typeof getVariations>;
+  quickPreview: { label: string; hex: string } | null;
+  history: HistoryItem[];
+  saveRecipe: () => void;
+  duplicateMixer: () => void;
+  exportCurrentJson: () => void;
+  exportCurrentPdf: () => void;
+  exportCurrentPng: () => void;
+  addComplement: () => void;
+  applyQuickAction: (label: string, hex: string) => void;
+  transformMedium: (kind: "wash" | "glaze" | "candy" | "airbrush") => void;
+  setPaletteBase: (hex: string) => void;
+  setSection: (section: SectionId) => void;
+  exportRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const {
+    database,
+    mixerColors,
+    updateMixerColor,
+    removeMixerColor,
+    addMixerColor,
+    mixMode,
+    setMixMode,
+    predictedHex,
+    calibratedHex,
+    setManualCalibratedHex,
+    matchedCalibration,
+    primerId,
+    setPrimerId,
+    primerHex,
+    customPrimer,
+    setCustomPrimer,
+    mixerOpacity,
+    setMixerOpacity,
+    mixerFinish,
+    setMixerFinish,
+    variations,
+    quickPreview,
+    history,
+    saveRecipe,
+    duplicateMixer,
+    exportCurrentJson,
+    exportCurrentPdf,
+    exportCurrentPng,
+    addComplement,
+    applyQuickAction,
+    transformMedium,
+    setPaletteBase,
+    setSection,
+    exportRef,
+  } = props;
+
+  const colorA = mixerColors[0]?.hex ?? "#000000";
+  const colorB = mixerColors[1]?.hex ?? "#ffffff";
+  const primerVariations = primerOptions.filter((primer) => primer.id !== "custom").slice(0, 6);
+  const layerSamples = [1, 2, 3].map((layers) => ({ layers, hex: applyPrimer(predictedHex, primerHex, mixerOpacity, layers) }));
+  const firstHsl = rgbToHsl(hexToRgb(mixerColors[0]?.hex ?? predictedHex));
+
+  return (
+    <div>
+      <SectionTitle
+        icon={FlaskConical}
+        title="Misturador"
+        subtitle="Mistura visual, perceptual e subtrativa para tintas reais, com ajuste manual para calibrar o que aconteceu na bancada."
+      />
+
+      <div className="mb-4 rounded-lg border border-amber-300/60 bg-amber-100 p-4 text-sm leading-6 text-amber-950 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
+        <strong>Resultado aproximado.</strong> Faça teste em paleta, colher plástica, pedaço de suporte de resina ou peça de descarte antes de aplicar no modelo final.
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-lg font-black text-slate-950 dark:text-white">Cores da mistura</h3>
+            <IconButton icon={Plus} label="Adicionar cor" onClick={addMixerColor} />
+          </div>
+
+          <div className="space-y-3">
+            {mixerColors.map((color, index) => {
+              const rgb = hexToRgb(color.hex);
+              const hsl = rgbToHsl(rgb);
+              return (
+                <div key={color.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                  <div className="grid gap-3 lg:grid-cols-[80px_minmax(160px,1.2fr)_minmax(180px,1fr)_minmax(170px,1fr)]">
+                    <ColorSwatch hex={color.hex} label={`Cor ${index + 1}`} />
+                    <div className="space-y-2">
+                      <FieldLabel>Nome comum / banco</FieldLabel>
+                      <select
+                        value={color.sourceId ?? "custom"}
+                        onChange={(event) => {
+                          const selected = database.colors.find((entry) => entry.id === event.target.value);
+                          if (selected) updateMixerColor(color.id, createMixerColor(selected, color.parts));
+                        }}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                      >
+                        <option value="custom">Cor personalizada</option>
+                        {database.colors.map((entry) => (
+                          <option key={entry.id} value={entry.id}>
+                            {entry.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        value={color.name}
+                        onChange={(event) => updateMixerColor(color.id, { name: event.target.value, sourceId: undefined })}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                        placeholder="Nome da cor"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <FieldLabel>Hex / RGB / HSL</FieldLabel>
+                      <div className="grid grid-cols-[56px_1fr] gap-2">
+                        <input
+                          type="color"
+                          value={normalizeHex(color.hex)}
+                          onChange={(event) => updateMixerColor(color.id, { hex: event.target.value, sourceId: undefined })}
+                          className="h-10 w-full rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-700 dark:bg-slate-950"
+                        />
+                        <input
+                          value={color.hex}
+                          onChange={(event) => updateMixerColor(color.id, { hex: normalizeHex(event.target.value), sourceId: undefined })}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm dark:border-slate-700 dark:bg-slate-950"
+                        />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {(["r", "g", "b"] as const).map((channel) => (
+                          <input
+                            key={channel}
+                            type="number"
+                            min={0}
+                            max={255}
+                            value={Math.round(rgb[channel])}
+                            onChange={(event) => {
+                              const next = { ...rgb, [channel]: Number(event.target.value) };
+                              updateMixerColor(color.id, { hex: rgbToHex(next), sourceId: undefined });
+                            }}
+                            className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                            title={channel.toUpperCase()}
+                          />
+                        ))}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        HSL {Math.round(hsl.h)}°, {Math.round(hsl.s)}%, {Math.round(hsl.l)}%
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <FieldLabel>Partes / gotas</FieldLabel>
+                      <div className="grid grid-cols-[1fr_78px] items-center gap-3">
+                        <input
+                          type="range"
+                          min={0}
+                          max={10}
+                          step={0.25}
+                          value={color.parts}
+                          onChange={(event) => updateMixerColor(color.id, { parts: Number(event.target.value) })}
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.25}
+                          value={color.parts}
+                          onChange={(event) => updateMixerColor(color.id, { parts: Number(event.target.value) })}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <select
+                          value={color.paintType}
+                          onChange={(event) => updateMixerColor(color.id, { paintType: event.target.value })}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                        >
+                          {paintInputTypes.map((type) => (
+                            <option key={type}>{type}</option>
+                          ))}
+                        </select>
+                        <select
+                          value={color.finish}
+                          onChange={(event) => updateMixerColor(color.id, { finish: event.target.value })}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                        >
+                          {finishOptions.map((finish) => (
+                            <option key={finish}>{finish}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        title="Remover cor"
+                        onClick={() => removeMixerColor(color.id)}
+                        className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-300 px-3 text-sm font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:text-rose-300 dark:hover:bg-rose-950"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Remover
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-4">
+            <div className="space-y-2">
+              <FieldLabel>Marca / linha fictícia</FieldLabel>
+              <select className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+                <option>Genérica Hobby Pro</option>
+                <option>Studio Resin Color</option>
+                <option>Mini Painter Acryl</option>
+                <option>AirLine Lacquer</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <FieldLabel>Primer / base</FieldLabel>
+              <select value={primerId} onChange={(event) => setPrimerId(event.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+                {primerOptions.map((primer) => (
+                  <option key={primer.id} value={primer.id}>
+                    {primer.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <FieldLabel>Opacidade da aplicação</FieldLabel>
+              <select value={mixerOpacity} onChange={(event) => setMixerOpacity(event.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+                {opacityOptions.map((option) => (
+                  <option key={option}>{option}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <FieldLabel>Acabamento</FieldLabel>
+              <select value={mixerFinish} onChange={(event) => setMixerFinish(event.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+                {finishOptions.map((option) => (
+                  <option key={option}>{option}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {primerId === "custom" ? (
+            <div className="mt-3 max-w-xs">
+              <FieldLabel>Cor personalizada do primer</FieldLabel>
+              <input type="color" value={customPrimer} onChange={(event) => setCustomPrimer(event.target.value)} className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-700 dark:bg-slate-950" />
+            </div>
+          ) : null}
+        </section>
+
+        <section ref={exportRef} id="recipe-export-card" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-lg font-black text-slate-950 dark:text-white">Resultado visual</h3>
+            <div className="flex flex-wrap gap-2">
+              {(["visual", "perceptual", "subtractive"] as MixMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setMixMode(mode)}
+                  className={cx(
+                    "rounded-lg border px-3 py-2 text-xs font-bold uppercase",
+                    mixMode === mode ? "border-teal-400 bg-teal-500 text-slate-950" : "border-slate-300 dark:border-slate-700",
+                  )}
+                >
+                  {mode === "visual" ? "RGB linear" : mode === "perceptual" ? "OKLab" : "Subtrativa"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <ColorSwatch hex={colorA} label="Cor A" large />
+            <ColorSwatch hex={colorB} label="Cor B" large />
+            <ColorSwatch hex={predictedHex} label="Previsto" large />
+            <div>
+              <ColorSwatch hex={calibratedHex} label="Calibrado" large />
+              <input
+                type="color"
+                value={calibratedHex}
+                onChange={(event) => setManualCalibratedHex(event.target.value)}
+                className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-700 dark:bg-slate-950"
+                title="Ajuste manual do resultado calibrado"
+              />
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+              <div className="mb-2 flex items-center gap-2 text-sm font-bold">
+                <Layers className="h-4 w-4 text-teal-500" />
+                Primer e camadas
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {layerSamples.map((sample) => (
+                  <ColorSwatch key={sample.layers} hex={sample.hex} label={`${sample.layers} camada${sample.layers > 1 ? "s" : ""}`} />
+                ))}
+              </div>
+            </div>
+            <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+              <div className="mb-2 flex items-center gap-2 text-sm font-bold">
+                <Pipette className="h-4 w-4 text-amber-500" />
+                Variações úteis
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  ["Clara", variations.lighter],
+                  ["Escura", variations.darker],
+                  ["Saturada", variations.saturated],
+                  ["Apagada", variations.desaturated],
+                  ["Quente", variations.warmer],
+                  ["Fria", variations.cooler],
+                ].map(([label, hex]) => (
+                  <ColorSwatch key={label} hex={hex} label={label} />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <div className="mb-2 text-sm font-bold text-slate-700 dark:text-slate-200">Variação por base</div>
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+              {primerVariations.map((primer) => (
+                <ColorSwatch key={primer.id} hex={applyPrimer(predictedHex, primer.hex, mixerOpacity, 1)} label={primer.label} />
+              ))}
+            </div>
+          </div>
+
+          {quickPreview ? (
+            <div className="mt-3 rounded-lg border border-teal-300 bg-teal-50 p-3 dark:border-teal-500/30 dark:bg-teal-500/10">
+              <div className="mb-2 text-sm font-bold text-teal-800 dark:text-teal-100">{quickPreview.label}</div>
+              <ColorSwatch hex={quickPreview.hex} label="Prévia gerada" />
+            </div>
+          ) : null}
+
+          {matchedCalibration ? (
+            <div className="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-100">
+              Calibração aplicada: {matchedCalibration.brand} / {matchedCalibration.line}, {matchedCalibration.layers} camadas sobre {matchedCalibration.primer}.
+            </div>
+          ) : null}
+        </section>
+      </div>
+
+      <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="mb-3 flex items-center gap-2">
+          <SlidersHorizontal className="h-5 w-5 text-teal-500" />
+          <h3 className="text-lg font-black">Ações rápidas</h3>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <IconButton icon={Save} label="Salvar receita" onClick={saveRecipe} />
+          <IconButton icon={Copy} label="Duplicar" onClick={duplicateMixer} />
+          <IconButton icon={FileJson} label="Exportar JSON" onClick={exportCurrentJson} />
+          <IconButton icon={FileText} label="Exportar PDF" onClick={exportCurrentPdf} />
+          <IconButton icon={ImageIcon} label="Exportar PNG" onClick={exportCurrentPng} />
+          <IconButton icon={Sparkles} label="Gerar variações" onClick={() => applyQuickAction("Variação harmônica", variations.saturated)} />
+          <IconButton
+            icon={Palette}
+            label="Criar paleta harmônica"
+            onClick={() => {
+              setPaletteBase(predictedHex);
+              setSection("palettes");
+            }}
+          />
+          <IconButton icon={Snowflake} label="Criar sombra" onClick={() => applyQuickAction("Sombra sugerida", variations.shadow)} />
+          <IconButton icon={ThermometerSun} label="Criar highlight" onClick={() => applyQuickAction("Highlight sugerido", variations.highlight)} />
+          <IconButton icon={Droplets} label="Criar wash" onClick={() => transformMedium("wash")} />
+          <IconButton icon={Droplets} label="Criar glaze" onClick={() => transformMedium("glaze")} />
+          <IconButton icon={Gem} label="Criar candy" onClick={() => transformMedium("candy")} />
+          <IconButton icon={SprayCan} label="Versão airbrush" onClick={() => transformMedium("airbrush")} />
+          <IconButton icon={Contrast} label="Adicionar complementar" onClick={addComplement} />
+          <IconButton icon={RotateCw} label="Neutralizar" onClick={addComplement} />
+          <IconButton icon={ThermometerSun} label="Mais quente" onClick={() => applyQuickAction("Mais quente", variations.warmer)} />
+          <IconButton icon={Snowflake} label="Mais frio" onClick={() => applyQuickAction("Mais frio", variations.cooler)} />
+          <IconButton icon={Sparkles} label="Mais saturado" onClick={() => applyQuickAction("Mais saturado", variations.saturated)} />
+          <IconButton icon={Contrast} label="Mais apagado" onClick={() => applyQuickAction("Mais apagado", variations.desaturated)} />
+        </div>
+      </section>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <h3 className="mb-3 text-lg font-black">Histórico das últimas misturas</h3>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {history.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                onClick={() => applyQuickAction("Histórico", item.calibratedHex ?? item.hex)}
+                className="rounded-lg border border-slate-200 p-2 text-left hover:border-teal-400 dark:border-slate-800"
+              >
+                <ColorSwatch hex={item.calibratedHex ?? item.hex} label={item.mode} />
+                <div className="mt-2 line-clamp-2 text-xs text-slate-600 dark:text-slate-300">{item.label}</div>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <h3 className="mb-3 text-lg font-black">Regras de mistura de cores</h3>
+          <div className="grid gap-4 md:grid-cols-2">
+            <RuleBlock title="Misturas básicas" items={seedDatabase.mixingRules.basics} />
+            <RuleBlock title="Complementares" items={seedDatabase.mixingRules.complementaries} />
+            <RuleBlock title="Ajustes rápidos" items={seedDatabase.mixingRules.quickAdjustments} />
+            <RuleBlock title="Receitas genéricas" items={seedDatabase.mixingRules.genericRecipes} />
+          </div>
+          <div className="mt-4 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+            <div className="text-sm font-bold">Entrada HSL da primeira cor</div>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              {(["h", "s", "l"] as const).map((key) => (
+                <div key={key}>
+                  <FieldLabel>{key.toUpperCase()}</FieldLabel>
+                  <input
+                    type="number"
+                    value={Math.round(firstHsl[key])}
+                    onChange={(event) => {
+                      const next = { ...firstHsl, [key]: Number(event.target.value) };
+                      const first = mixerColors[0];
+                      if (first) updateMixerColor(first.id, { hex: rgbToHex(hslToRgb(next)), sourceId: undefined });
+                    }}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function RuleBlock({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div>
+      <h4 className="mb-2 text-sm font-black text-slate-950 dark:text-white">{title}</h4>
+      <ul className="space-y-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+        {items.map((item) => (
+          <li key={item} className="flex gap-2">
+            <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-teal-500" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function SearchBox({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
+  return (
+    <div className="relative w-full max-w-md">
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+      />
+    </div>
+  );
+}
+
+function RecipesSection({
+  recipes,
+  search,
+  setSearch,
+  useRecipeInMixer,
+  saveRecipe,
+}: {
+  recipes: Recipe[];
+  search: string;
+  setSearch: (value: string) => void;
+  useRecipeInMixer: (recipe: Recipe, adaptation?: string) => void;
+  saveRecipe: (recipe: Recipe) => void;
+}) {
+  return (
+    <div>
+      <SectionTitle icon={BookOpen} title="Receitas Prontas" subtitle="Biblioteca inicial com 50 receitas de cores e efeitos para miniaturas, bustos, dioramas e peças em resina." />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <SearchBox value={search} onChange={setSearch} placeholder="Buscar receita, primer, técnica ou efeito" />
+        <div className="text-sm font-semibold text-slate-600 dark:text-slate-300">{recipes.length} receitas</div>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {recipes.map((recipe) => (
+          <DataCard key={recipe.id}>
+            <div className="mb-3 flex gap-3">
+              <div className="h-16 w-16 shrink-0 rounded-lg border border-white/20" style={{ background: recipe.targetHex }} />
+              <div className="min-w-0">
+                <h3 className="text-lg font-black text-slate-950 dark:text-white">{recipe.name}</h3>
+                <p className="text-sm text-slate-600 dark:text-slate-300">Primer: {recipe.primer}</p>
+                <p className="font-mono text-xs uppercase text-slate-500">{recipe.targetHex}</p>
+              </div>
+            </div>
+            <div className="space-y-2 text-sm leading-6 text-slate-700 dark:text-slate-300">
+              <p>
+                <strong>Mistura:</strong> {recipe.mix.map((part) => `${part.parts} ${part.color}`).join(" + ")}
+              </p>
+              <p>
+                <strong>Sombra:</strong> {recipe.shade}
+              </p>
+              <p>
+                <strong>Highlight:</strong> {recipe.highlight}
+              </p>
+              <p>
+                <strong>Acabamento:</strong> {recipe.finish}
+              </p>
+              {recipe.observations ? <p>{recipe.observations}</p> : null}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <IconButton icon={FlaskConical} label="usar no misturador" onClick={() => useRecipeInMixer(recipe)} />
+              <IconButton icon={Save} label="salvar" onClick={() => saveRecipe(recipe)} />
+              <IconButton icon={Copy} label="copiar proporção" onClick={() => copyToClipboard(recipe.mix.map((part) => `${part.parts} partes ${part.color}`).join(" + "))} />
+              <IconButton icon={Sparkles} label="gerar variação" onClick={() => useRecipeInMixer(recipe, "variação")} />
+              <IconButton icon={Moon} label="primer preto" onClick={() => useRecipeInMixer(recipe, "adaptada para primer preto")} />
+              <IconButton icon={Sun} label="primer branco" onClick={() => useRecipeInMixer(recipe, "adaptada para primer branco")} />
+              <IconButton icon={SprayCan} label="airbrush" onClick={() => useRecipeInMixer(recipe, "airbrush")} />
+              <IconButton icon={Brush} label="pincel" onClick={() => useRecipeInMixer(recipe, "pincel")} />
+            </div>
+          </DataCard>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TechniquesSection({
+  techniques,
+  search,
+  setSearch,
+  activeFilter,
+  setActiveFilter,
+}: {
+  techniques: PaintDatabase["techniques"];
+  search: string;
+  setSearch: (value: string) => void;
+  activeFilter: string;
+  setActiveFilter: (value: string) => void;
+}) {
+  return (
+    <div>
+      <SectionTitle icon={Brush} title="Técnicas de Pintura" subtitle="Cards pesquisáveis com materiais, proporção, passo a passo, erros comuns e correções." />
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <SearchBox value={search} onChange={setSearch} placeholder="Buscar técnica, material, uso ou tag" />
+        <select value={activeFilter} onChange={(event) => setActiveFilter(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+          <option value="todos">todos os filtros</option>
+          {techniqueFilters.map((filter) => (
+            <option key={filter} value={filter}>
+              {filter}
+            </option>
+          ))}
+        </select>
+        <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">{techniques.length} técnicas</span>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {techniques.map((technique) => (
+          <DataCard key={technique.id}>
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-black text-slate-950 dark:text-white">{technique.name}</h3>
+                <p className="text-sm font-semibold text-teal-700 dark:text-teal-300">{technique.difficulty}</p>
+              </div>
+              <Brush className="h-5 w-5 text-slate-400" />
+            </div>
+            <p className="mb-3 text-sm leading-6 text-slate-700 dark:text-slate-300">{technique.purpose}</p>
+            <div className="mb-3 flex flex-wrap gap-1">
+              {technique.tags.slice(0, 5).map((tag) => (
+                <span key={tag} className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                  {tag}
+                </span>
+              ))}
+            </div>
+            <InfoList title="Materiais" items={technique.materials} />
+            <p className="my-3 rounded-lg border border-slate-200 p-2 text-sm text-slate-700 dark:border-slate-800 dark:text-slate-300">
+              <strong>Proporção:</strong> {technique.ratio}
+            </p>
+            <InfoList title="Passo a passo" items={technique.steps} numbered />
+            <InfoList title="Erros comuns" items={technique.mistakes} />
+            <InfoList title="Como corrigir" items={technique.fixes} />
+            <InfoList title="Onde usar" items={technique.uses} />
+          </DataCard>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InfoList({ title, items, numbered }: { title: string; items: string[]; numbered?: boolean }) {
+  const List = numbered ? "ol" : "ul";
+  return (
+    <div className="mb-3">
+      <h4 className="mb-1 text-sm font-black text-slate-950 dark:text-white">{title}</h4>
+      <List className={cx("space-y-1 text-sm leading-6 text-slate-600 dark:text-slate-300", numbered ? "list-decimal pl-5" : "")}>
+        {items.map((item) => (
+          <li key={item} className={numbered ? "" : "flex gap-2"}>
+            {numbered ? null : <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-teal-500" />}
+            <span>{item}</span>
+          </li>
+        ))}
+      </List>
+    </div>
+  );
+}
+
+function PaintTypesSection({ paintTypes, search, setSearch }: { paintTypes: PaintDatabase["paintTypes"]; search: string; setSearch: (value: string) => void }) {
+  const iconForType = (id: string) => {
+    if (id.includes("primer")) return ShieldCheck;
+    if (id.includes("wash") || id.includes("glaze") || id.includes("ink")) return Droplets;
+    if (id.includes("candy") || id.includes("varnish")) return Gem;
+    if (id.includes("metal") || id.includes("nmm")) return Sparkles;
+    if (id.includes("texture") || id.includes("pigment")) return Layers;
+    return PaintBucket;
+  };
+  return (
+    <div>
+      <SectionTitle icon={PaintBucket} title="Tipos de Tinta e Efeitos" subtitle="Referência prática para primer, base, layer, wash, ink, glaze, candy, metálicos, fluorescentes, óleos, enamels, vernizes e efeitos especiais." />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <SearchBox value={search} onChange={setSearch} placeholder="Buscar tipo, uso ou erro comum" />
+        <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">{paintTypes.length} tipos</span>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {paintTypes.map((paintType) => {
+          const Icon = iconForType(paintType.id);
+          return (
+            <DataCard key={paintType.id}>
+              <div className="mb-3 flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-teal-700 dark:bg-slate-800 dark:text-teal-300">
+                  <Icon className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="text-lg font-black text-slate-950 dark:text-white">{paintType.name}</h3>
+                  <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">{paintType.description}</p>
+                </div>
+              </div>
+              {paintType.recipe ? <p className="mb-3 rounded-lg border border-teal-200 bg-teal-50 p-2 text-sm text-teal-950 dark:border-teal-500/30 dark:bg-teal-500/10 dark:text-teal-100">{paintType.recipe}</p> : null}
+              {paintType.flow ? <InfoList title="Fluxo" items={paintType.flow} numbered /> : null}
+              <InfoList title="Melhores usos" items={paintType.bestUse} />
+              <InfoList title="Primers indicados" items={paintType.bestPrimer} />
+              <InfoList title="Erros comuns" items={paintType.commonMistakes} />
+              <InfoList title="Correções" items={paintType.fixes} />
+            </DataCard>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ResinSection({
+  database,
+  checklist,
+  setChecklist,
+}: {
+  database: PaintDatabase;
+  checklist: Record<string, boolean>;
+  setChecklist: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+}) {
+  const toggle = (key: string) => setChecklist((items) => ({ ...items, [key]: !items[key] }));
+  return (
+    <div>
+      <SectionTitle icon={ShieldCheck} title="Fluxo para Resina 3D" subtitle="Checklist completo para peças SLA/MSLA/DLP, da preparação ao verniz seletivo." />
+      <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+        <DataCard>
+          <h3 className="mb-3 text-lg font-black">Antes da pintura</h3>
+          <div className="space-y-2">
+            {database.resinFlow.beforePainting.map((item) => (
+              <label key={item} className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800">
+                <input type="checkbox" checked={Boolean(checklist[item])} onChange={() => toggle(item)} className="h-4 w-4 accent-teal-500" />
+                <span className={cx(checklist[item] && "line-through opacity-60")}>{item}</span>
+              </label>
+            ))}
+          </div>
+        </DataCard>
+        <DataCard>
+          <h3 className="mb-3 text-lg font-black">Fluxo de pintura recomendado</h3>
+          <ol className="space-y-2">
+            {database.resinFlow.paintingFlow.map((item, index) => (
+              <li key={item} className="flex gap-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-teal-500 text-sm font-black text-slate-950">{index + 1}</span>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ol>
+        </DataCard>
+      </div>
+      <DataCard className="mt-4">
+        <h3 className="mb-3 flex items-center gap-2 text-lg font-black">
+          <AlertTriangle className="h-5 w-5 text-amber-500" />
+          Alertas
+        </h3>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {database.resinFlow.alerts.map((alert) => (
+            <div key={alert} className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+              {alert}
+            </div>
+          ))}
+        </div>
+      </DataCard>
+    </div>
+  );
+}
+
+function PalettesSection({
+  palettes,
+  generatedPalette,
+  paletteType,
+  setPaletteType,
+  paletteBase,
+  setPaletteBase,
+}: {
+  palettes: PaintDatabase["palettes"];
+  generatedPalette: PaletteData;
+  paletteType: string;
+  setPaletteType: (value: string) => void;
+  paletteBase: string;
+  setPaletteBase: (value: string) => void;
+}) {
+  return (
+    <div>
+      <SectionTitle icon={Palette} title="Biblioteca de Paletas" subtitle="Gerador e biblioteca para montar cor principal, secundária, sombra, highlight, detalhe, contraste, base e acabamento." />
+      <DataCard className="mb-4">
+        <div className="grid gap-3 md:grid-cols-[220px_140px_1fr]">
+          <div>
+            <FieldLabel>Tipo de paleta</FieldLabel>
+            <select value={paletteType} onChange={(event) => setPaletteType(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+              {paletteTypes.map((type) => (
+                <option key={type}>{type}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <FieldLabel>Cor base</FieldLabel>
+            <input type="color" value={paletteBase} onChange={(event) => setPaletteBase(event.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-700 dark:bg-slate-950" />
+          </div>
+          <PaletteCard palette={generatedPalette} generated />
+        </div>
+      </DataCard>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {palettes.map((palette) => (
+          <PaletteCard key={palette.id} palette={palette} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PaletteCard({ palette, generated }: { palette: PaletteData; generated?: boolean }) {
+  const entries = Object.entries(palette.colors);
+  return (
+    <div className={cx("rounded-lg border border-slate-200 p-4 dark:border-slate-800", generated ? "bg-teal-50 dark:bg-teal-500/10" : "bg-white dark:bg-slate-900")}>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-black text-slate-950 dark:text-white">{palette.name}</h3>
+          <p className="text-sm text-slate-600 dark:text-slate-300">{palette.type}</p>
+        </div>
+        <WandSparkles className="h-5 w-5 text-teal-500" />
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {entries.map(([label, hex]) => (
+          <ColorSwatch key={label} hex={hex} label={label} />
+        ))}
+      </div>
+      <p className="mt-3 text-sm text-slate-700 dark:text-slate-300">
+        <strong>Verniz:</strong> {palette.varnish}
+      </p>
+      <div className="mt-2 flex flex-wrap gap-1">
+        {palette.techniques.map((technique) => (
+          <span key={technique} className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            {technique}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProblemsSection({ problems, search, setSearch, safety }: { problems: PaintDatabase["problems"]; search: string; setSearch: (value: string) => void; safety: string[] }) {
+  return (
+    <div>
+      <SectionTitle icon={Wrench} title="Problemas e Soluções" subtitle="Busca rápida para falhas comuns de aderência, primer, wash, candy, fluorescentes, metálicos e compatibilidade." />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <SearchBox value={search} onChange={setSearch} placeholder="Buscar problema, causa ou solução" />
+        <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">{problems.length} problemas</span>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {problems.map((problem) => (
+          <DataCard key={problem.id}>
+            <h3 className="mb-2 flex items-center gap-2 text-lg font-black text-slate-950 dark:text-white">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              {problem.problem}
+            </h3>
+            <InfoList title="Causas" items={problem.causes} />
+            <InfoList title="Solução" items={problem.solution} />
+          </DataCard>
+        ))}
+      </div>
+      <DataCard className="mt-4">
+        <h3 className="mb-3 text-lg font-black">Segurança e boas práticas</h3>
+        <div className="grid gap-2 md:grid-cols-2">
+          {safety.map((item) => (
+            <div key={item} className="flex gap-2 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-500" />
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+      </DataCard>
+    </div>
+  );
+}
+
+function MineSection({
+  savedRecipes,
+  setSavedRecipes,
+  useSavedInMixer,
+}: {
+  savedRecipes: SavedRecipe[];
+  setSavedRecipes: React.Dispatch<React.SetStateAction<SavedRecipe[]>>;
+  useSavedInMixer: (recipe: SavedRecipe) => void;
+}) {
+  return (
+    <div>
+      <SectionTitle icon={Save} title="Minhas Receitas" subtitle="Receitas salvas localmente neste navegador via localStorage." />
+      {savedRecipes.length === 0 ? (
+        <DataCard>
+          <p className="text-slate-600 dark:text-slate-300">Nenhuma receita salva ainda.</p>
+        </DataCard>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {savedRecipes.map((recipe) => (
+            <DataCard key={recipe.id}>
+              <div className="mb-3 flex gap-3">
+                <ColorSwatch hex={recipe.calibratedHex ?? recipe.resultHex} label="Resultado" />
+                <div>
+                  <h3 className="text-lg font-black">{recipe.name}</h3>
+                  <p className="text-xs text-slate-500">{new Date(recipe.createdAt).toLocaleString("pt-BR")}</p>
+                  <p className="text-sm text-slate-600 dark:text-slate-300">{recipe.primer}</p>
+                </div>
+              </div>
+              <InfoList title="Mistura" items={recipe.colors.map((color) => `${color.parts} partes ${color.name} (${color.hex})`)} />
+              <p className="mb-3 text-sm leading-6 text-slate-600 dark:text-slate-300">{recipe.notes}</p>
+              <div className="flex flex-wrap gap-2">
+                <IconButton icon={FlaskConical} label="usar" onClick={() => useSavedInMixer(recipe)} />
+                <IconButton icon={FileJson} label="exportar" onClick={() => downloadBlob(`${recipe.name}.json`, JSON.stringify(recipe, null, 2), "application/json")} />
+                <IconButton icon={Trash2} label="remover" onClick={() => setSavedRecipes((items) => items.filter((item) => item.id !== recipe.id))} />
+              </div>
+            </DataCard>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SettingsSection({
+  theme,
+  setTheme,
+  database,
+  exportDatabase,
+  importDatabase,
+  calibrationDraft,
+  setCalibrationDraft,
+  saveCalibration,
+  calibrations,
+  setCalibrations,
+  currentKey,
+}: {
+  theme: "dark" | "light";
+  setTheme: (theme: "dark" | "light") => void;
+  database: PaintDatabase;
+  exportDatabase: () => void;
+  importDatabase: (file?: File) => void;
+  calibrationDraft: {
+    brand: string;
+    line: string;
+    colorName: string;
+    estimatedHex: string;
+    opacity: string;
+    finish: string;
+    primer: string;
+    layers: number;
+    dilution: string;
+    photoName: string;
+  };
+  setCalibrationDraft: React.Dispatch<React.SetStateAction<{
+    brand: string;
+    line: string;
+    colorName: string;
+    estimatedHex: string;
+    opacity: string;
+    finish: string;
+    primer: string;
+    layers: number;
+    dilution: string;
+    photoName: string;
+  }>>;
+  saveCalibration: () => void;
+  calibrations: Calibration[];
+  setCalibrations: React.Dispatch<React.SetStateAction<Calibration[]>>;
+  currentKey: string;
+}) {
+  return (
+    <div>
+      <SectionTitle icon={Settings} title="Configurações / Calibração" subtitle="Importação do banco, exportação completa e correções manuais para aproximar o motor da tinta real usada na bancada." />
+      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <DataCard>
+          <h3 className="mb-3 text-lg font-black">Preferências e banco local</h3>
+          <div className="mb-4 flex flex-wrap gap-2">
+            <IconButton icon={theme === "dark" ? Sun : Moon} label={theme === "dark" ? "Tema claro" : "Tema escuro"} onClick={() => setTheme(theme === "dark" ? "light" : "dark")} />
+            <IconButton icon={Download} label="Exportar banco" onClick={exportDatabase} />
+            <label className="inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+              <Upload className="h-4 w-4" />
+              Importar banco
+              <input type="file" accept="application/json" className="hidden" onChange={(event) => importDatabase(event.target.files?.[0])} />
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <Stat label="Cores" value={database.colors.length} />
+            <Stat label="Receitas" value={database.recipes.length} />
+            <Stat label="Técnicas" value={database.techniques.length} />
+            <Stat label="Tipos" value={database.paintTypes.length} />
+          </div>
+        </DataCard>
+
+        <DataCard>
+          <h3 className="mb-3 text-lg font-black">Calibrar Mistura Real</h3>
+          <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+            Faça a mistura real, informe a proporção usada, escolha a cor resultante e salve a correção. Próximas misturas com a mesma combinação usam esta calibração.
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <TextInput label="Marca" value={calibrationDraft.brand} onChange={(value) => setCalibrationDraft((draft) => ({ ...draft, brand: value }))} />
+            <TextInput label="Linha de tinta" value={calibrationDraft.line} onChange={(value) => setCalibrationDraft((draft) => ({ ...draft, line: value }))} />
+            <TextInput label="Nome da cor" value={calibrationDraft.colorName} onChange={(value) => setCalibrationDraft((draft) => ({ ...draft, colorName: value }))} />
+            <div>
+              <FieldLabel>Hex estimado</FieldLabel>
+              <div className="mt-1 grid grid-cols-[52px_1fr] gap-2">
+                <input type="color" value={normalizeHex(calibrationDraft.estimatedHex)} onChange={(event) => setCalibrationDraft((draft) => ({ ...draft, estimatedHex: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-700 dark:bg-slate-950" />
+                <input value={calibrationDraft.estimatedHex} onChange={(event) => setCalibrationDraft((draft) => ({ ...draft, estimatedHex: normalizeHex(event.target.value) }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
+              </div>
+            </div>
+            <TextInput label="Opacidade" value={calibrationDraft.opacity} onChange={(value) => setCalibrationDraft((draft) => ({ ...draft, opacity: value }))} />
+            <TextInput label="Acabamento" value={calibrationDraft.finish} onChange={(value) => setCalibrationDraft((draft) => ({ ...draft, finish: value }))} />
+            <TextInput label="Primer usado" value={calibrationDraft.primer} onChange={(value) => setCalibrationDraft((draft) => ({ ...draft, primer: value }))} />
+            <div>
+              <FieldLabel>Número de camadas</FieldLabel>
+              <input type="number" min={1} value={calibrationDraft.layers} onChange={(event) => setCalibrationDraft((draft) => ({ ...draft, layers: Number(event.target.value) }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
+            </div>
+            <TextInput label="Diluição" value={calibrationDraft.dilution} onChange={(value) => setCalibrationDraft((draft) => ({ ...draft, dilution: value }))} />
+            <div>
+              <FieldLabel>Foto opcional da amostra</FieldLabel>
+              <input type="file" accept="image/*" onChange={(event) => setCalibrationDraft((draft) => ({ ...draft, photoName: event.target.files?.[0]?.name ?? "" }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
+              {calibrationDraft.photoName ? <p className="mt-1 text-xs text-slate-500">{calibrationDraft.photoName}</p> : null}
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <IconButton icon={Save} label="Salvar calibração" onClick={saveCalibration} />
+            <span className="text-xs text-slate-500 dark:text-slate-400">Chave atual: {currentKey || "sem proporção"}</span>
+          </div>
+        </DataCard>
+      </div>
+
+      <DataCard className="mt-4">
+        <h3 className="mb-3 text-lg font-black">Calibrações salvas</h3>
+        {calibrations.length === 0 ? (
+          <p className="text-sm text-slate-600 dark:text-slate-300">Nenhuma calibração salva.</p>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {calibrations.map((calibration) => (
+              <div key={calibration.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                <ColorSwatch hex={calibration.estimatedHex} label={calibration.colorName} />
+                <p className="mt-2 text-sm font-bold">{calibration.brand} / {calibration.line}</p>
+                <p className="text-xs text-slate-500">{calibration.layers} camadas, {calibration.primer}, {calibration.dilution}</p>
+                <button type="button" onClick={() => setCalibrations((items) => items.filter((item) => item.id !== calibration.id))} className="mt-2 inline-flex items-center gap-2 rounded-lg border border-rose-300 px-3 py-2 text-sm font-semibold text-rose-700 dark:border-rose-900 dark:text-rose-300">
+                  <Trash2 className="h-4 w-4" />
+                  Remover
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </DataCard>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+      <div className="text-2xl font-black text-slate-950 dark:text-white">{value}</div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+    </div>
+  );
+}
+
+function TextInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <div>
+      <FieldLabel>{label}</FieldLabel>
+      <input value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
+    </div>
+  );
+}
+
+export default App;
