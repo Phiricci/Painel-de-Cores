@@ -139,4 +139,5 @@ export type Calibration = {
   layers: number;
   dilution: string;
   photoName?: string;
+  photoDataUrl?: string;
 };

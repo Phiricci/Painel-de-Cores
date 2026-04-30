@@ -8,6 +8,7 @@ import {
   BookOpen,
   Brush,
   CheckCircle2,
+  ClipboardList,
   Contrast,
   Copy,
   Download,
@@ -18,6 +19,7 @@ import {
   Gem,
   Image as ImageIcon,
   Layers,
+  Link,
   Moon,
   Palette,
   PaintBucket,
@@ -32,6 +34,7 @@ import {
   Snowflake,
   Sparkles,
   SprayCan,
+  Star,
   Sun,
   ThermometerSun,
   Trash2,
@@ -66,6 +69,7 @@ type SectionId =
   | "resin"
   | "palettes"
   | "problems"
+  | "project"
   | "mine"
   | "settings";
 
@@ -78,6 +82,35 @@ type HistoryItem = {
   label: string;
 };
 
+type FavoriteState = {
+  recipes: string[];
+  techniques: string[];
+  palettes: string[];
+};
+
+type ProjectState = {
+  name: string;
+  piece: string;
+  primer: string;
+  palette: string;
+  varnish: string;
+  recipes: string[];
+  notes: string;
+  tasks: Array<{ id: string; label: string; done: boolean }>;
+};
+
+type ShareRecipePayload = {
+  v: 1;
+  name: string;
+  colors: MixerColor[];
+  mode: MixMode;
+  primer: string;
+  opacity: string;
+  finish: string;
+  resultHex: string;
+  calibratedHex?: string;
+};
+
 const seedDatabase = rawDatabase as unknown as PaintDatabase;
 
 const storageKeys = {
@@ -87,6 +120,8 @@ const storageKeys = {
   history: "solitario.color3d.history",
   checklist: "solitario.color3d.resinChecklist",
   theme: "solitario.color3d.theme",
+  favorites: "solitario.color3d.favorites",
+  project: "solitario.color3d.currentProject",
 };
 
 const sections: Array<{ id: SectionId; label: string; icon: LucideIcon }> = [
@@ -97,6 +132,7 @@ const sections: Array<{ id: SectionId; label: string; icon: LucideIcon }> = [
   { id: "resin", label: "Fluxo para Resina 3D", icon: ShieldCheck },
   { id: "palettes", label: "Biblioteca de Paletas", icon: Palette },
   { id: "problems", label: "Problemas e Soluções", icon: Wrench },
+  { id: "project", label: "Projeto Atual", icon: ClipboardList },
   { id: "mine", label: "Minhas Receitas", icon: Save },
   { id: "settings", label: "Configurações / Calibração", icon: Settings },
 ];
@@ -158,6 +194,26 @@ const techniqueFilters = [
   "weathering",
 ];
 
+const emptyFavorites: FavoriteState = { recipes: [], techniques: [], palettes: [] };
+
+const defaultProject: ProjectState = {
+  name: "Projeto sem título",
+  piece: "Miniatura / peça em resina",
+  primer: "cinza ou zenithal",
+  palette: "",
+  varnish: "fosco geral com gloss seletivo",
+  recipes: [],
+  notes: "",
+  tasks: [
+    { id: "limpeza", label: "Limpar, secar e curar a peça", done: false },
+    { id: "primer", label: "Aplicar primer fino e inspecionar falhas", done: false },
+    { id: "base", label: "Aplicar basecoat em camadas finas", done: false },
+    { id: "sombras", label: "Criar sombras, wash ou recess wash", done: false },
+    { id: "luzes", label: "Fazer layers, highlights e detalhes", done: false },
+    { id: "acabamento", label: "Aplicar verniz final e gloss seletivo", done: false },
+  ],
+};
+
 const cx = (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(" ");
 
 const normalizeText = (value: string) =>
@@ -195,6 +251,27 @@ const downloadBlob = (filename: string, content: BlobPart, type: string) => {
 
 const copyToClipboard = async (text: string) => {
   await navigator.clipboard?.writeText(text);
+};
+
+const encodeSharePayload = (payload: ShareRecipePayload) => {
+  const json = JSON.stringify(payload);
+  const bytes = new TextEncoder().encode(json);
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+};
+
+const decodeSharePayload = (value: string): ShareRecipePayload | null => {
+  try {
+    const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes)) as ShareRecipePayload;
+  } catch {
+    return null;
+  }
 };
 
 const createMixerColor = (color: ColorEntry, parts = 1): MixerColor => ({
@@ -356,6 +433,8 @@ function App() {
   const [history, setHistory] = useLocalStorage<HistoryItem[]>(storageKeys.history, []);
   const [checklist, setChecklist] = useLocalStorage<Record<string, boolean>>(storageKeys.checklist, {});
   const [theme, setTheme] = useLocalStorage<"dark" | "light">(storageKeys.theme, "dark");
+  const [favorites, setFavorites] = useLocalStorage<FavoriteState>(storageKeys.favorites, emptyFavorites);
+  const [project, setProject] = useLocalStorage<ProjectState>(storageKeys.project, defaultProject);
   const [section, setSection] = useState<SectionId>("mixer");
   const [mixMode, setMixMode] = useState<MixMode>("perceptual");
   const [primerId, setPrimerId] = useState("cinza");
@@ -367,10 +446,13 @@ function App() {
   const [activeTechniqueFilter, setActiveTechniqueFilter] = useState("todos");
   const [paintSearch, setPaintSearch] = useState("");
   const [problemSearch, setProblemSearch] = useState("");
+  const [globalSearch, setGlobalSearch] = useState("");
+  const [favoriteOnly, setFavoriteOnly] = useState({ recipes: false, techniques: false, palettes: false });
   const [quickPreview, setQuickPreview] = useState<{ label: string; hex: string } | null>(null);
   const [paletteType, setPaletteType] = useState("complementar");
   const [paletteBase, setPaletteBase] = useState("#6d28d9");
   const exportRef = useRef<HTMLDivElement>(null);
+  const loadedSharedRecipe = useRef(false);
 
   const [mixerColors, setMixerColors] = useState<MixerColor[]>(() => [
     createMixerColor(seedDatabase.colors.find((color) => color.id === "vermelho-vivo") ?? seedDatabase.colors[0], 3),
@@ -398,11 +480,28 @@ function App() {
     layers: 2,
     dilution: "1 parte tinta + 1 parte água/medium",
     photoName: "",
+    photoDataUrl: "",
   });
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  useEffect(() => {
+    if (loadedSharedRecipe.current) return;
+    loadedSharedRecipe.current = true;
+    const hash = window.location.hash;
+    if (!hash.startsWith("#receita=")) return;
+    const payload = decodeSharePayload(hash.replace("#receita=", ""));
+    if (!payload?.colors?.length) return;
+    setMixerColors(payload.colors.slice(0, 5).map((color) => ({ ...color, id: crypto.randomUUID() })));
+    setMixMode(payload.mode ?? "perceptual");
+    setMixerOpacity(payload.opacity);
+    setMixerFinish(payload.finish);
+    setManualCalibratedHex(payload.calibratedHex ?? payload.resultHex);
+    setQuickPreview({ label: `Receita importada: ${payload.name}`, hex: payload.calibratedHex ?? payload.resultHex });
+    setSection("mixer");
+  }, []);
 
   useEffect(() => {
     setManualCalibratedHex(matchedCalibration?.estimatedHex ?? predictedHex);
@@ -440,9 +539,9 @@ function App() {
     const term = normalizeText(recipeSearch);
     return database.recipes.filter((recipe) => {
       const body = normalizeText(`${recipe.name} ${recipe.primer} ${recipe.shade} ${recipe.highlight} ${recipe.techniques.join(" ")}`);
-      return body.includes(term);
+      return body.includes(term) && (!favoriteOnly.recipes || favorites.recipes.includes(recipe.id));
     });
-  }, [database.recipes, recipeSearch]);
+  }, [database.recipes, favoriteOnly.recipes, favorites.recipes, recipeSearch]);
 
   const techniqueResults = useMemo(() => {
     const term = normalizeText(techniqueSearch);
@@ -453,9 +552,9 @@ function App() {
         activeTechniqueFilter === "todos" ||
         technique.difficulty === activeTechniqueFilter ||
         technique.tags.some((tag) => normalizeText(tag) === normalizeText(activeTechniqueFilter));
-      return matchesSearch && matchesFilter;
+      return matchesSearch && matchesFilter && (!favoriteOnly.techniques || favorites.techniques.includes(technique.id));
     });
-  }, [activeTechniqueFilter, database.techniques, techniqueSearch]);
+  }, [activeTechniqueFilter, database.techniques, favoriteOnly.techniques, favorites.techniques, techniqueSearch]);
 
   const paintTypeResults = useMemo(() => {
     const term = normalizeText(paintSearch);
@@ -466,6 +565,103 @@ function App() {
     const term = normalizeText(problemSearch);
     return database.problems.filter((problem) => normalizeText(`${problem.problem} ${problem.causes.join(" ")} ${problem.solution.join(" ")}`).includes(term));
   }, [database.problems, problemSearch]);
+
+  const paletteResults = useMemo(
+    () => database.palettes.filter((palette) => !favoriteOnly.palettes || favorites.palettes.includes(palette.id)),
+    [database.palettes, favoriteOnly.palettes, favorites.palettes],
+  );
+
+  const globalResults = useMemo(() => {
+    const term = normalizeText(globalSearch);
+    if (term.length < 2) return [];
+    const results: Array<{ id: string; label: string; detail: string; section: SectionId; action: () => void }> = [];
+
+    database.recipes.forEach((recipe) => {
+      if (normalizeText(`${recipe.name} ${recipe.primer} ${recipe.techniques.join(" ")}`).includes(term)) {
+        results.push({
+          id: `recipe-${recipe.id}`,
+          label: recipe.name,
+          detail: "Receita pronta",
+          section: "recipes",
+          action: () => {
+            setRecipeSearch(recipe.name);
+            setSection("recipes");
+          },
+        });
+      }
+    });
+
+    database.techniques.forEach((technique) => {
+      if (normalizeText(`${technique.name} ${technique.tags.join(" ")} ${technique.purpose}`).includes(term)) {
+        results.push({
+          id: `technique-${technique.id}`,
+          label: technique.name,
+          detail: `Técnica ${technique.difficulty}`,
+          section: "techniques",
+          action: () => {
+            setTechniqueSearch(technique.name);
+            setSection("techniques");
+          },
+        });
+      }
+    });
+
+    database.paintTypes.forEach((paintType) => {
+      if (normalizeText(`${paintType.name} ${paintType.description}`).includes(term)) {
+        results.push({
+          id: `paint-${paintType.id}`,
+          label: paintType.name,
+          detail: "Tipo de tinta",
+          section: "paintTypes",
+          action: () => {
+            setPaintSearch(paintType.name);
+            setSection("paintTypes");
+          },
+        });
+      }
+    });
+
+    database.palettes.forEach((palette) => {
+      if (normalizeText(`${palette.name} ${palette.type} ${palette.techniques.join(" ")}`).includes(term)) {
+        results.push({
+          id: `palette-${palette.id}`,
+          label: palette.name,
+          detail: `Paleta ${palette.type}`,
+          section: "palettes",
+          action: () => setSection("palettes"),
+        });
+      }
+    });
+
+    database.problems.forEach((problem) => {
+      if (normalizeText(`${problem.problem} ${problem.causes.join(" ")} ${problem.solution.join(" ")}`).includes(term)) {
+        results.push({
+          id: `problem-${problem.id}`,
+          label: problem.problem,
+          detail: "Problema e solução",
+          section: "problems",
+          action: () => {
+            setProblemSearch(problem.problem);
+            setSection("problems");
+          },
+        });
+      }
+    });
+
+    savedRecipes.forEach((recipe) => {
+      if (normalizeText(`${recipe.name} ${recipe.notes}`).includes(term)) {
+        results.push({
+          id: `saved-${recipe.id}`,
+          label: recipe.name,
+          detail: "Minha receita",
+          section: "mine",
+          action: () => setSection("mine"),
+        });
+      }
+    });
+
+    return results.slice(0, 12);
+  }, [database, globalSearch, savedRecipes]);
 
   const updateMixerColor = (id: string, patch: Partial<MixerColor>) => {
     setMixerColors((colors) => colors.map((color) => (color.id === id ? { ...color, ...patch } : color)));
@@ -479,6 +675,16 @@ function App() {
 
   const removeMixerColor = (id: string) => {
     setMixerColors((colors) => (colors.length <= 1 ? colors : colors.filter((color) => color.id !== id)));
+  };
+
+  const toggleFavorite = (kind: keyof FavoriteState, id: string) => {
+    setFavorites((current) => {
+      const list = current[kind];
+      return {
+        ...current,
+        [kind]: list.includes(id) ? list.filter((item) => item !== id) : [...list, id],
+      };
+    });
   };
 
   const useRecipeInMixer = (recipe: Recipe, adaptation?: string) => {
@@ -615,6 +821,69 @@ function App() {
     link.click();
   };
 
+  const createShareLink = (payload: ShareRecipePayload) => {
+    const url = new URL(window.location.href);
+    url.hash = `receita=${encodeSharePayload(payload)}`;
+    return url.toString();
+  };
+
+  const shareCurrentRecipe = async () => {
+    const payload: ShareRecipePayload = {
+      v: 1,
+      name: "Receita do Misturador",
+      colors: mixerColors,
+      mode: mixMode,
+      primer: currentPrimer.label,
+      opacity: mixerOpacity,
+      finish: mixerFinish,
+      resultHex: predictedHex,
+      calibratedHex,
+    };
+    const link = createShareLink(payload);
+    await copyToClipboard(link);
+    if (navigator.share) {
+      await navigator.share({ title: payload.name, text: "Receita de pintura do Solitario - Painel de Cores 3D", url: link }).catch(() => undefined);
+    }
+    setQuickPreview({ label: "Link copiado para compartilhar", hex: calibratedHex });
+  };
+
+  const shareSavedRecipe = async (recipe: SavedRecipe) => {
+    const payload: ShareRecipePayload = {
+      v: 1,
+      name: recipe.name,
+      colors: recipe.colors,
+      mode: "perceptual",
+      primer: recipe.primer,
+      opacity: recipe.opacity,
+      finish: recipe.finish,
+      resultHex: recipe.resultHex,
+      calibratedHex: recipe.calibratedHex,
+    };
+    const link = createShareLink(payload);
+    await copyToClipboard(link);
+    if (navigator.share) {
+      await navigator.share({ title: recipe.name, text: "Receita de pintura do Solitario - Painel de Cores 3D", url: link }).catch(() => undefined);
+    }
+  };
+
+  const addCurrentMixToProject = () => {
+    const saved: SavedRecipe = {
+      id: crypto.randomUUID(),
+      name: `Mistura do projeto ${new Date().toLocaleDateString("pt-BR")}`,
+      createdAt: new Date().toISOString(),
+      colors: mixerColors,
+      resultHex: predictedHex,
+      calibratedHex,
+      primer: currentPrimer.label,
+      opacity: mixerOpacity,
+      finish: mixerFinish,
+      notes: "Mistura adicionada a partir do misturador.",
+    };
+    setSavedRecipes((items) => [saved, ...items]);
+    setProject((current) => ({ ...current, recipes: [saved.id, ...current.recipes.filter((id) => id !== saved.id)] }));
+    setQuickPreview({ label: "Mistura adicionada ao Projeto Atual", hex: calibratedHex });
+  };
+
   const exportDatabase = () => {
     downloadBlob("banco-solitario-cores-3d.json", JSON.stringify(database, null, 2), "application/json");
   };
@@ -674,6 +943,8 @@ function App() {
             exportCurrentJson={exportCurrentJson}
             exportCurrentPdf={exportCurrentPdf}
             exportCurrentPng={exportCurrentPng}
+            shareCurrentRecipe={shareCurrentRecipe}
+            addCurrentMixToProject={addCurrentMixToProject}
             addComplement={addComplement}
             applyQuickAction={applyQuickAction}
             transformMedium={transformMedium}
@@ -690,6 +961,10 @@ function App() {
             setSearch={setRecipeSearch}
             useRecipeInMixer={useRecipeInMixer}
             saveRecipe={saveRecipe}
+            favorites={favorites.recipes}
+            favoriteOnly={favoriteOnly.recipes}
+            setFavoriteOnly={(value) => setFavoriteOnly((current) => ({ ...current, recipes: value }))}
+            toggleFavorite={(id) => toggleFavorite("recipes", id)}
           />
         );
       case "techniques":
@@ -700,6 +975,10 @@ function App() {
             setSearch={setTechniqueSearch}
             activeFilter={activeTechniqueFilter}
             setActiveFilter={setActiveTechniqueFilter}
+            favorites={favorites.techniques}
+            favoriteOnly={favoriteOnly.techniques}
+            setFavoriteOnly={(value) => setFavoriteOnly((current) => ({ ...current, techniques: value }))}
+            toggleFavorite={(id) => toggleFavorite("techniques", id)}
           />
         );
       case "paintTypes":
@@ -707,9 +986,11 @@ function App() {
       case "resin":
         return <ResinSection database={database} checklist={checklist} setChecklist={setChecklist} />;
       case "palettes":
-        return <PalettesSection palettes={database.palettes} generatedPalette={generatedPalette} paletteType={paletteType} setPaletteType={setPaletteType} paletteBase={paletteBase} setPaletteBase={setPaletteBase} />;
+        return <PalettesSection palettes={paletteResults} generatedPalette={generatedPalette} paletteType={paletteType} setPaletteType={setPaletteType} paletteBase={paletteBase} setPaletteBase={setPaletteBase} favorites={favorites.palettes} favoriteOnly={favoriteOnly.palettes} setFavoriteOnly={(value) => setFavoriteOnly((current) => ({ ...current, palettes: value }))} toggleFavorite={(id) => toggleFavorite("palettes", id)} />;
       case "problems":
         return <ProblemsSection problems={problemResults} search={problemSearch} setSearch={setProblemSearch} safety={database.safety} />;
+      case "project":
+        return <ProjectSection project={project} setProject={setProject} savedRecipes={savedRecipes} palettes={database.palettes} addCurrentMixToProject={addCurrentMixToProject} />;
       case "mine":
         return <MineSection savedRecipes={savedRecipes} setSavedRecipes={setSavedRecipes} useSavedInMixer={(saved) => {
           setMixerColors(saved.colors.map((color) => ({ ...color, id: crypto.randomUUID() })));
@@ -717,7 +998,7 @@ function App() {
           setMixerFinish(saved.finish);
           setQuickPreview({ label: saved.name, hex: saved.calibratedHex ?? saved.resultHex });
           setSection("mixer");
-        }} />;
+        }} shareSavedRecipe={shareSavedRecipe} />;
       case "settings":
         return (
           <SettingsSection
@@ -776,6 +1057,40 @@ function App() {
               );
             })}
           </nav>
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/70">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                value={globalSearch}
+                onChange={(event) => setGlobalSearch(event.target.value)}
+                placeholder="Busca global"
+                className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+              />
+            </div>
+            {globalResults.length > 0 ? (
+              <div className="mt-2 max-h-72 space-y-1 overflow-auto">
+                {globalResults.map((result) => (
+                  <button
+                    key={result.id}
+                    type="button"
+                    onClick={() => {
+                      result.action();
+                      setGlobalSearch("");
+                    }}
+                    className="flex w-full items-center justify-between gap-3 rounded-lg px-2 py-2 text-left text-sm hover:bg-white dark:hover:bg-slate-800"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-semibold">{result.label}</span>
+                      <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{result.detail}</span>
+                    </span>
+                    <span className="text-xs font-bold uppercase text-teal-600 dark:text-teal-300">{sections.find((item) => item.id === result.section)?.label.split(" ")[0]}</span>
+                  </button>
+                ))}
+              </div>
+            ) : globalSearch.length > 1 ? (
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Nada encontrado.</p>
+            ) : null}
+          </div>
           <div className="mt-5 hidden rounded-lg border border-amber-300/50 bg-amber-100 p-3 text-xs leading-5 text-amber-950 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100 lg:block">
             <div className="mb-1 flex items-center gap-2 font-bold">
               <AlertTriangle className="h-4 w-4" />
@@ -820,6 +1135,8 @@ function MixerSection(props: {
   exportCurrentJson: () => void;
   exportCurrentPdf: () => void;
   exportCurrentPng: () => void;
+  shareCurrentRecipe: () => void;
+  addCurrentMixToProject: () => void;
   addComplement: () => void;
   applyQuickAction: (label: string, hex: string) => void;
   transformMedium: (kind: "wash" | "glaze" | "candy" | "airbrush") => void;
@@ -856,6 +1173,8 @@ function MixerSection(props: {
     exportCurrentJson,
     exportCurrentPdf,
     exportCurrentPng,
+    shareCurrentRecipe,
+    addCurrentMixToProject,
     addComplement,
     applyQuickAction,
     transformMedium,
@@ -1161,6 +1480,8 @@ function MixerSection(props: {
           <IconButton icon={FileJson} label="Exportar JSON" onClick={exportCurrentJson} />
           <IconButton icon={FileText} label="Exportar PDF" onClick={exportCurrentPdf} />
           <IconButton icon={ImageIcon} label="Exportar PNG" onClick={exportCurrentPng} />
+          <IconButton icon={Link} label="Compartilhar link" onClick={shareCurrentRecipe} />
+          <IconButton icon={ClipboardList} label="Adicionar ao projeto" onClick={addCurrentMixToProject} />
           <IconButton icon={Sparkles} label="Gerar variações" onClick={() => applyQuickAction("Variação harmônica", variations.saturated)} />
           <IconButton
             icon={Palette}
@@ -1267,25 +1588,54 @@ function SearchBox({ value, onChange, placeholder }: { value: string; onChange: 
   );
 }
 
+function FavoriteButton({ active, onClick, label = "Favoritar" }: { active: boolean; onClick: () => void; label?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={active ? "Remover dos favoritos" : label}
+      className={cx(
+        "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border transition",
+        active
+          ? "border-amber-300 bg-amber-300 text-slate-950"
+          : "border-slate-300 bg-white text-slate-500 hover:border-amber-300 hover:text-amber-500 dark:border-slate-700 dark:bg-slate-950",
+      )}
+    >
+      <Star className={cx("h-4 w-4", active && "fill-current")} />
+    </button>
+  );
+}
+
 function RecipesSection({
   recipes,
   search,
   setSearch,
   useRecipeInMixer,
   saveRecipe,
+  favorites,
+  favoriteOnly,
+  setFavoriteOnly,
+  toggleFavorite,
 }: {
   recipes: Recipe[];
   search: string;
   setSearch: (value: string) => void;
   useRecipeInMixer: (recipe: Recipe, adaptation?: string) => void;
   saveRecipe: (recipe: Recipe) => void;
+  favorites: string[];
+  favoriteOnly: boolean;
+  setFavoriteOnly: (value: boolean) => void;
+  toggleFavorite: (id: string) => void;
 }) {
   return (
     <div>
       <SectionTitle icon={BookOpen} title="Receitas Prontas" subtitle="Biblioteca inicial com 50 receitas de cores e efeitos para miniaturas, bustos, dioramas e peças em resina." />
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <SearchBox value={search} onChange={setSearch} placeholder="Buscar receita, primer, técnica ou efeito" />
-        <div className="text-sm font-semibold text-slate-600 dark:text-slate-300">{recipes.length} receitas</div>
+        <div className="flex items-center gap-2">
+          <IconButton icon={Star} label="Favoritos" active={favoriteOnly} onClick={() => setFavoriteOnly(!favoriteOnly)} />
+          <div className="text-sm font-semibold text-slate-600 dark:text-slate-300">{recipes.length} receitas</div>
+        </div>
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {recipes.map((recipe) => (
@@ -1297,6 +1647,7 @@ function RecipesSection({
                 <p className="text-sm text-slate-600 dark:text-slate-300">Primer: {recipe.primer}</p>
                 <p className="font-mono text-xs uppercase text-slate-500">{recipe.targetHex}</p>
               </div>
+              <FavoriteButton active={favorites.includes(recipe.id)} onClick={() => toggleFavorite(recipe.id)} />
             </div>
             <div className="space-y-2 text-sm leading-6 text-slate-700 dark:text-slate-300">
               <p>
@@ -1336,12 +1687,20 @@ function TechniquesSection({
   setSearch,
   activeFilter,
   setActiveFilter,
+  favorites,
+  favoriteOnly,
+  setFavoriteOnly,
+  toggleFavorite,
 }: {
   techniques: PaintDatabase["techniques"];
   search: string;
   setSearch: (value: string) => void;
   activeFilter: string;
   setActiveFilter: (value: string) => void;
+  favorites: string[];
+  favoriteOnly: boolean;
+  setFavoriteOnly: (value: boolean) => void;
+  toggleFavorite: (id: string) => void;
 }) {
   return (
     <div>
@@ -1356,6 +1715,7 @@ function TechniquesSection({
             </option>
           ))}
         </select>
+        <IconButton icon={Star} label="Favoritos" active={favoriteOnly} onClick={() => setFavoriteOnly(!favoriteOnly)} />
         <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">{techniques.length} técnicas</span>
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -1366,7 +1726,10 @@ function TechniquesSection({
                 <h3 className="text-lg font-black text-slate-950 dark:text-white">{technique.name}</h3>
                 <p className="text-sm font-semibold text-teal-700 dark:text-teal-300">{technique.difficulty}</p>
               </div>
-              <Brush className="h-5 w-5 text-slate-400" />
+              <div className="flex items-center gap-2">
+                <FavoriteButton active={favorites.includes(technique.id)} onClick={() => toggleFavorite(technique.id)} />
+                <Brush className="h-5 w-5 text-slate-400" />
+              </div>
             </div>
             <p className="mb-3 text-sm leading-6 text-slate-700 dark:text-slate-300">{technique.purpose}</p>
             <div className="mb-3 flex flex-wrap gap-1">
@@ -1513,6 +1876,10 @@ function PalettesSection({
   setPaletteType,
   paletteBase,
   setPaletteBase,
+  favorites,
+  favoriteOnly,
+  setFavoriteOnly,
+  toggleFavorite,
 }: {
   palettes: PaintDatabase["palettes"];
   generatedPalette: PaletteData;
@@ -1520,6 +1887,10 @@ function PalettesSection({
   setPaletteType: (value: string) => void;
   paletteBase: string;
   setPaletteBase: (value: string) => void;
+  favorites: string[];
+  favoriteOnly: boolean;
+  setFavoriteOnly: (value: boolean) => void;
+  toggleFavorite: (id: string) => void;
 }) {
   return (
     <div>
@@ -1541,16 +1912,20 @@ function PalettesSection({
           <PaletteCard palette={generatedPalette} generated />
         </div>
       </DataCard>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <IconButton icon={Star} label="Favoritos" active={favoriteOnly} onClick={() => setFavoriteOnly(!favoriteOnly)} />
+        <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">{palettes.length} paletas</span>
+      </div>
       <div className="grid gap-4 lg:grid-cols-2">
         {palettes.map((palette) => (
-          <PaletteCard key={palette.id} palette={palette} />
+          <PaletteCard key={palette.id} palette={palette} favorite={favorites.includes(palette.id)} onToggleFavorite={() => toggleFavorite(palette.id)} />
         ))}
       </div>
     </div>
   );
 }
 
-function PaletteCard({ palette, generated }: { palette: PaletteData; generated?: boolean }) {
+function PaletteCard({ palette, generated, favorite, onToggleFavorite }: { palette: PaletteData; generated?: boolean; favorite?: boolean; onToggleFavorite?: () => void }) {
   const entries = Object.entries(palette.colors);
   return (
     <div className={cx("rounded-lg border border-slate-200 p-4 dark:border-slate-800", generated ? "bg-teal-50 dark:bg-teal-500/10" : "bg-white dark:bg-slate-900")}>
@@ -1559,7 +1934,10 @@ function PaletteCard({ palette, generated }: { palette: PaletteData; generated?:
           <h3 className="text-lg font-black text-slate-950 dark:text-white">{palette.name}</h3>
           <p className="text-sm text-slate-600 dark:text-slate-300">{palette.type}</p>
         </div>
-        <WandSparkles className="h-5 w-5 text-teal-500" />
+          <div className="flex items-center gap-2">
+            {onToggleFavorite ? <FavoriteButton active={Boolean(favorite)} onClick={onToggleFavorite} /> : null}
+            <WandSparkles className="h-5 w-5 text-teal-500" />
+          </div>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {entries.map(([label, hex]) => (
@@ -1615,14 +1993,129 @@ function ProblemsSection({ problems, search, setSearch, safety }: { problems: Pa
   );
 }
 
+function ProjectSection({
+  project,
+  setProject,
+  savedRecipes,
+  palettes,
+  addCurrentMixToProject,
+}: {
+  project: ProjectState;
+  setProject: React.Dispatch<React.SetStateAction<ProjectState>>;
+  savedRecipes: SavedRecipe[];
+  palettes: PaintDatabase["palettes"];
+  addCurrentMixToProject: () => void;
+}) {
+  const selectedRecipes = savedRecipes.filter((recipe) => project.recipes.includes(recipe.id));
+  const selectedPalette = palettes.find((palette) => palette.id === project.palette);
+  const updateProject = (patch: Partial<ProjectState>) => setProject((current) => ({ ...current, ...patch }));
+  const toggleRecipe = (id: string) =>
+    updateProject({
+      recipes: project.recipes.includes(id) ? project.recipes.filter((recipeId) => recipeId !== id) : [...project.recipes, id],
+    });
+  const toggleTask = (id: string) =>
+    updateProject({
+      tasks: project.tasks.map((task) => (task.id === id ? { ...task, done: !task.done } : task)),
+    });
+  const addTask = () => {
+    const label = window.prompt("Nova etapa do projeto");
+    if (!label) return;
+    updateProject({ tasks: [...project.tasks, { id: crypto.randomUUID(), label, done: false }] });
+  };
+  const summary = [
+    `Projeto: ${project.name}`,
+    `Peça: ${project.piece}`,
+    `Primer: ${project.primer}`,
+    `Paleta: ${selectedPalette?.name ?? "sem paleta definida"}`,
+    `Verniz: ${project.varnish}`,
+    `Receitas: ${selectedRecipes.map((recipe) => recipe.name).join(", ") || "nenhuma"}`,
+    `Notas: ${project.notes || "sem notas"}`,
+  ].join("\n");
+
+  return (
+    <div>
+      <SectionTitle icon={ClipboardList} title="Projeto Atual" subtitle="Um caderno leve para manter a peça, paleta, receitas, etapas e observações juntos enquanto você pinta." />
+      <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+        <DataCard>
+          <h3 className="mb-3 text-lg font-black">Dados do projeto</h3>
+          <div className="grid gap-3 md:grid-cols-2">
+            <TextInput label="Nome do projeto" value={project.name} onChange={(value) => updateProject({ name: value })} />
+            <TextInput label="Peça / modelo" value={project.piece} onChange={(value) => updateProject({ piece: value })} />
+            <TextInput label="Primer usado" value={project.primer} onChange={(value) => updateProject({ primer: value })} />
+            <TextInput label="Verniz final" value={project.varnish} onChange={(value) => updateProject({ varnish: value })} />
+            <div className="md:col-span-2">
+              <FieldLabel>Paleta escolhida</FieldLabel>
+              <select value={project.palette} onChange={(event) => updateProject({ palette: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+                <option value="">Sem paleta definida</option>
+                {palettes.map((palette) => (
+                  <option key={palette.id} value={palette.id}>
+                    {palette.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="md:col-span-2">
+              <FieldLabel>Observações</FieldLabel>
+              <textarea value={project.notes} onChange={(event) => updateProject({ notes: event.target.value })} rows={5} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
+            </div>
+          </div>
+          {selectedPalette ? (
+            <div className="mt-4">
+              <PaletteCard palette={selectedPalette} />
+            </div>
+          ) : null}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <IconButton icon={ClipboardList} label="Adicionar mistura atual" onClick={addCurrentMixToProject} />
+            <IconButton icon={Copy} label="Copiar resumo" onClick={() => copyToClipboard(summary)} />
+            <IconButton icon={FileJson} label="Exportar projeto" onClick={() => downloadBlob(`${project.name}.json`, JSON.stringify({ project, selectedRecipes, selectedPalette }, null, 2), "application/json")} />
+          </div>
+        </DataCard>
+
+        <DataCard>
+          <h3 className="mb-3 text-lg font-black">Etapas e receitas</h3>
+          <div className="mb-4 space-y-2">
+            {project.tasks.map((task) => (
+              <label key={task.id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800">
+                <input type="checkbox" checked={task.done} onChange={() => toggleTask(task.id)} className="h-4 w-4 accent-teal-500" />
+                <span className={cx(task.done && "line-through opacity-60")}>{task.label}</span>
+              </label>
+            ))}
+            <IconButton icon={Plus} label="Adicionar etapa" onClick={addTask} />
+          </div>
+
+          <h4 className="mb-2 text-sm font-black text-slate-950 dark:text-white">Receitas salvas neste projeto</h4>
+          {savedRecipes.length === 0 ? (
+            <p className="text-sm text-slate-600 dark:text-slate-300">Salve uma receita no misturador para anexar aqui.</p>
+          ) : (
+            <div className="max-h-80 space-y-2 overflow-auto pr-1">
+              {savedRecipes.map((recipe) => (
+                <label key={recipe.id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800">
+                  <input type="checkbox" checked={project.recipes.includes(recipe.id)} onChange={() => toggleRecipe(recipe.id)} className="h-4 w-4 accent-teal-500" />
+                  <span className="h-7 w-7 shrink-0 rounded-md border border-white/20" style={{ background: recipe.calibratedHex ?? recipe.resultHex }} />
+                  <span className="min-w-0">
+                    <span className="block truncate font-semibold">{recipe.name}</span>
+                    <span className="block truncate text-xs text-slate-500">{recipe.primer}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+        </DataCard>
+      </div>
+    </div>
+  );
+}
+
 function MineSection({
   savedRecipes,
   setSavedRecipes,
   useSavedInMixer,
+  shareSavedRecipe,
 }: {
   savedRecipes: SavedRecipe[];
   setSavedRecipes: React.Dispatch<React.SetStateAction<SavedRecipe[]>>;
   useSavedInMixer: (recipe: SavedRecipe) => void;
+  shareSavedRecipe: (recipe: SavedRecipe) => void;
 }) {
   return (
     <div>
@@ -1647,6 +2140,7 @@ function MineSection({
               <p className="mb-3 text-sm leading-6 text-slate-600 dark:text-slate-300">{recipe.notes}</p>
               <div className="flex flex-wrap gap-2">
                 <IconButton icon={FlaskConical} label="usar" onClick={() => useSavedInMixer(recipe)} />
+                <IconButton icon={Link} label="compartilhar" onClick={() => shareSavedRecipe(recipe)} />
                 <IconButton icon={FileJson} label="exportar" onClick={() => downloadBlob(`${recipe.name}.json`, JSON.stringify(recipe, null, 2), "application/json")} />
                 <IconButton icon={Trash2} label="remover" onClick={() => setSavedRecipes((items) => items.filter((item) => item.id !== recipe.id))} />
               </div>
@@ -1687,6 +2181,7 @@ function SettingsSection({
     layers: number;
     dilution: string;
     photoName: string;
+    photoDataUrl: string;
   };
   setCalibrationDraft: React.Dispatch<React.SetStateAction<{
     brand: string;
@@ -1699,6 +2194,7 @@ function SettingsSection({
     layers: number;
     dilution: string;
     photoName: string;
+    photoDataUrl: string;
   }>>;
   saveCalibration: () => void;
   calibrations: Calibration[];
@@ -1725,6 +2221,9 @@ function SettingsSection({
             <Stat label="Receitas" value={database.recipes.length} />
             <Stat label="Técnicas" value={database.techniques.length} />
             <Stat label="Tipos" value={database.paintTypes.length} />
+          </div>
+          <div className="mt-4 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm leading-6 text-teal-950 dark:border-teal-500/30 dark:bg-teal-500/10 dark:text-teal-100">
+            Depois de publicado, o app pode ser instalado no celular pelo menu do navegador em “Adicionar à tela inicial”. O manifesto e o service worker já estão configurados.
           </div>
         </DataCard>
 
@@ -1754,8 +2253,23 @@ function SettingsSection({
             <TextInput label="Diluição" value={calibrationDraft.dilution} onChange={(value) => setCalibrationDraft((draft) => ({ ...draft, dilution: value }))} />
             <div>
               <FieldLabel>Foto opcional da amostra</FieldLabel>
-              <input type="file" accept="image/*" onChange={(event) => setCalibrationDraft((draft) => ({ ...draft, photoName: event.target.files?.[0]?.name ?? "" }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) {
+                    setCalibrationDraft((draft) => ({ ...draft, photoName: "", photoDataUrl: "" }));
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onload = () => setCalibrationDraft((draft) => ({ ...draft, photoName: file.name, photoDataUrl: String(reader.result ?? "") }));
+                  reader.readAsDataURL(file);
+                }}
+                className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+              />
               {calibrationDraft.photoName ? <p className="mt-1 text-xs text-slate-500">{calibrationDraft.photoName}</p> : null}
+              {calibrationDraft.photoDataUrl ? <img src={calibrationDraft.photoDataUrl} alt="Amostra calibrada" className="mt-2 h-28 w-full rounded-lg object-cover" /> : null}
             </div>
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -1774,6 +2288,7 @@ function SettingsSection({
             {calibrations.map((calibration) => (
               <div key={calibration.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                 <ColorSwatch hex={calibration.estimatedHex} label={calibration.colorName} />
+                {calibration.photoDataUrl ? <img src={calibration.photoDataUrl} alt={calibration.photoName ?? calibration.colorName} className="mt-2 h-28 w-full rounded-lg object-cover" /> : null}
                 <p className="mt-2 text-sm font-bold">{calibration.brand} / {calibration.line}</p>
                 <p className="text-xs text-slate-500">{calibration.layers} camadas, {calibration.primer}, {calibration.dilution}</p>
                 <button type="button" onClick={() => setCalibrations((items) => items.filter((item) => item.id !== calibration.id))} className="mt-2 inline-flex items-center gap-2 rounded-lg border border-rose-300 px-3 py-2 text-sm font-semibold text-rose-700 dark:border-rose-900 dark:text-rose-300">
