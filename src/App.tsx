@@ -17,6 +17,7 @@ import {
   FileText,
   FlaskConical,
   Gem,
+  Home,
   Image as ImageIcon,
   Layers,
   Link,
@@ -43,6 +44,7 @@ import {
   Wrench,
 } from "lucide-react";
 import rawDatabase from "./data/paintDatabase.json";
+import { paintBrands } from "./data/paintBrands";
 import {
   adjustHsl,
   applyPrimer,
@@ -62,6 +64,7 @@ import {
 import type { Calibration, ColorEntry, MixerColor, PaintDatabase, Palette as PaletteData, Recipe, SavedRecipe } from "./types";
 
 type SectionId =
+  | "home"
   | "mixer"
   | "recipes"
   | "techniques"
@@ -71,6 +74,7 @@ type SectionId =
   | "problems"
   | "project"
   | "mine"
+  | "guide"
   | "settings";
 
 type HistoryItem = {
@@ -135,6 +139,17 @@ const sections: Array<{ id: SectionId; label: string; icon: LucideIcon }> = [
   { id: "project", label: "Projeto Atual", icon: ClipboardList },
   { id: "mine", label: "Minhas Receitas", icon: Save },
   { id: "settings", label: "Configurações / Calibração", icon: Settings },
+];
+
+const primarySections: Array<{ id: SectionId; label: string; icon: LucideIcon }> = [
+  { id: "home", label: "Início", icon: Home },
+  { id: "mixer", label: "Misturador", icon: FlaskConical },
+  { id: "recipes", label: "Receitas", icon: BookOpen },
+  { id: "palettes", label: "Paletas", icon: Palette },
+  { id: "project", label: "Projeto Atual", icon: ClipboardList },
+  { id: "mine", label: "Salvos", icon: Save },
+  { id: "guide", label: "Guia", icon: Brush },
+  { id: "settings", label: "Ajustes", icon: Settings },
 ];
 
 const primerOptions = [
@@ -285,6 +300,24 @@ const createMixerColor = (color: ColorEntry, parts = 1): MixerColor => ({
   finish: color.finish,
 });
 
+const createBrandMixerColor = (brandId: string, paintId: string, parts = 1): MixerColor => {
+  const brand = paintBrands.find((entry) => entry.id === brandId) ?? paintBrands[0];
+  const paint = brand.paints.find((entry) => entry.id === paintId) ?? brand.paints[0];
+  return {
+    id: crypto.randomUUID(),
+    brandId: brand.id,
+    brandName: brand.name,
+    paintId: paint.id,
+    line: paint.line,
+    name: paint.name,
+    hex: paint.hex,
+    parts,
+    paintType: paint.type,
+    opacity: paint.opacity,
+    finish: paint.finish,
+  };
+};
+
 const createCustomMixerColor = (name: string, hex: string, parts = 1): MixerColor => ({
   id: crypto.randomUUID(),
   name,
@@ -303,6 +336,30 @@ const findColorForMix = (database: PaintDatabase, colorName: string, fallbackHex
     database.colors.find((color) => normalized.includes(normalizeText(color.family)) || normalizeText(color.name).includes(normalized.split(" ")[0])) ??
     null
   ) ?? createCustomMixerColor(colorName, fallbackHex);
+};
+
+const colorDistance = (a: string, b: string) => {
+  const rgbA = hexToRgb(a);
+  const rgbB = hexToRgb(b);
+  const hslA = rgbToHsl(rgbA);
+  const hslB = rgbToHsl(rgbB);
+  const hueDistance = Math.abs(((hslA.h - hslB.h + 540) % 360) - 180) / 180;
+  const rgbDistance = Math.sqrt((rgbA.r - rgbB.r) ** 2 + (rgbA.g - rgbB.g) ** 2 + (rgbA.b - rgbB.b) ** 2) / 441.7;
+  const saturationDistance = Math.abs(hslA.s - hslB.s) / 100;
+  const lightnessDistance = Math.abs(hslA.l - hslB.l) / 100;
+  return rgbDistance * 0.58 + hueDistance * 0.22 + saturationDistance * 0.1 + lightnessDistance * 0.1;
+};
+
+const closestBrandPaint = (brandId: string, targetHex: string, line?: string) => {
+  const brand = paintBrands.find((entry) => entry.id === brandId) ?? paintBrands[0];
+  const pool = line && line !== "todas" ? brand.paints.filter((paint) => paint.line === line) : brand.paints;
+  const candidates = pool.length ? pool : brand.paints;
+  return [...candidates].sort((a, b) => colorDistance(a.hex, targetHex) - colorDistance(b.hex, targetHex))[0];
+};
+
+const brandLineOptions = (brandId: string) => {
+  const brand = paintBrands.find((entry) => entry.id === brandId) ?? paintBrands[0];
+  return ["todas", ...brand.lines];
 };
 
 const paletteFromBase = (type: string, baseHex: string): PaletteData => {
@@ -435,12 +492,14 @@ function App() {
   const [theme, setTheme] = useLocalStorage<"dark" | "light">(storageKeys.theme, "dark");
   const [favorites, setFavorites] = useLocalStorage<FavoriteState>(storageKeys.favorites, emptyFavorites);
   const [project, setProject] = useLocalStorage<ProjectState>(storageKeys.project, defaultProject);
-  const [section, setSection] = useState<SectionId>("mixer");
+  const [section, setSection] = useState<SectionId>("home");
   const [mixMode, setMixMode] = useState<MixMode>("perceptual");
   const [primerId, setPrimerId] = useState("cinza");
   const [customPrimer, setCustomPrimer] = useState("#64748b");
   const [mixerOpacity, setMixerOpacity] = useState("semi-opaco");
   const [mixerFinish, setMixerFinish] = useState("fosco");
+  const [selectedBrandId, setSelectedBrandId] = useState("vallejo");
+  const [selectedBrandLine, setSelectedBrandLine] = useState("todas");
   const [recipeSearch, setRecipeSearch] = useState("");
   const [techniqueSearch, setTechniqueSearch] = useState("");
   const [activeTechniqueFilter, setActiveTechniqueFilter] = useState("todos");
@@ -468,6 +527,17 @@ function App() {
   const calibratedHex = normalizeHex(matchedCalibration?.estimatedHex ?? manualCalibratedHex);
   const variations = useMemo(() => getVariations(predictedHex), [predictedHex]);
   const generatedPalette = useMemo(() => paletteFromBase(paletteType, paletteBase), [paletteType, paletteBase]);
+  const selectedBrand = paintBrands.find((brand) => brand.id === selectedBrandId) ?? paintBrands[0];
+  const selectedBrandPaints = selectedBrand.paints.filter((paint) => selectedBrandLine === "todas" || paint.line === selectedBrandLine);
+  const brandEquivalentResult = closestBrandPaint(selectedBrandId, calibratedHex, selectedBrandLine);
+  const brandEquivalentColors = useMemo(
+    () =>
+      mixerColors.map((color) => ({
+        color,
+        paint: closestBrandPaint(selectedBrandId, color.hex, selectedBrandLine),
+      })),
+    [mixerColors, selectedBrandId, selectedBrandLine],
+  );
 
   const [calibrationDraft, setCalibrationDraft] = useState({
     brand: "Genérica",
@@ -669,12 +739,57 @@ function App() {
 
   const addMixerColor = () => {
     if (mixerColors.length >= 5) return;
+    const nextPaint = selectedBrandPaints[mixerColors.length % Math.max(1, selectedBrandPaints.length)];
+    if (nextPaint) {
+      setMixerColors((colors) => [...colors, createBrandMixerColor(selectedBrand.id, nextPaint.id, 1)]);
+      return;
+    }
     const next = database.colors[mixerColors.length % database.colors.length];
     setMixerColors((colors) => [...colors, createMixerColor(next, 1)]);
   };
 
   const removeMixerColor = (id: string) => {
     setMixerColors((colors) => (colors.length <= 1 ? colors : colors.filter((color) => color.id !== id)));
+  };
+
+  const updateMixerColorFromBrandPaint = (id: string, brandId: string, paintId: string) => {
+    const brand = paintBrands.find((entry) => entry.id === brandId);
+    const paint = brand?.paints.find((entry) => entry.id === paintId);
+    if (!brand || !paint) return;
+    updateMixerColor(id, {
+      brandId: brand.id,
+      brandName: brand.name,
+      paintId: paint.id,
+      line: paint.line,
+      sourceId: undefined,
+      name: paint.name,
+      hex: paint.hex,
+      paintType: paint.type,
+      opacity: paint.opacity,
+      finish: paint.finish,
+    });
+  };
+
+  const convertMixerToBrand = () => {
+    setMixerColors((colors) =>
+      colors.map((color) => {
+        const paint = closestBrandPaint(selectedBrandId, color.hex, selectedBrandLine);
+        return {
+          ...color,
+          brandId: selectedBrand.id,
+          brandName: selectedBrand.name,
+          paintId: paint.id,
+          line: paint.line,
+          sourceId: undefined,
+          name: paint.name,
+          hex: paint.hex,
+          paintType: paint.type,
+          opacity: paint.opacity,
+          finish: paint.finish,
+        };
+      }),
+    );
+    setQuickPreview({ label: `Mistura convertida para ${selectedBrand.name}`, hex: brandEquivalentResult.hex });
   };
 
   const toggleFavorite = (kind: keyof FavoriteState, id: string) => {
@@ -776,6 +891,8 @@ function App() {
       mode: mixMode,
       colors: mixerColors,
       primer: currentPrimer.label,
+      targetBrand: selectedBrand.name,
+      targetLine: selectedBrandLine,
       predictedHex,
       calibratedHex,
       opacity: mixerOpacity,
@@ -797,15 +914,16 @@ function App() {
     doc.setFont("helvetica", "normal");
     doc.text(`Modo: ${mixMode}`, 16, 42);
     doc.text(`Primer: ${currentPrimer.label}`, 16, 50);
-    doc.text(`Opacidade: ${mixerOpacity} | Acabamento: ${mixerFinish}`, 16, 58);
+    doc.text(`Marca alvo: ${selectedBrand.name} / ${selectedBrandLine}`, 16, 58);
+    doc.text(`Opacidade: ${mixerOpacity} | Acabamento: ${mixerFinish}`, 16, 66);
     doc.setFillColor(predicted.r, predicted.g, predicted.b);
-    doc.rect(16, 68, 46, 26, "F");
+    doc.rect(16, 76, 46, 26, "F");
     doc.setFillColor(calibrated.r, calibrated.g, calibrated.b);
-    doc.rect(70, 68, 46, 26, "F");
-    doc.text(`Previsto: ${predictedHex}`, 16, 102);
-    doc.text(`Calibrado: ${calibratedHex}`, 70, 102);
+    doc.rect(70, 76, 46, 26, "F");
+    doc.text(`Previsto: ${predictedHex}`, 16, 110);
+    doc.text(`Calibrado: ${calibratedHex}`, 70, 110);
     mixerColors.forEach((color, index) => {
-      doc.text(`${index + 1}. ${color.parts} partes - ${color.name} (${color.hex})`, 16, 118 + index * 8);
+      doc.text(`${index + 1}. ${color.parts} partes - ${color.name} (${color.brandName ?? "genérica"})`, 16, 126 + index * 8);
     });
     doc.setFontSize(9);
     doc.text("Resultado aproximado. Faça teste em paleta, suporte de resina ou peça de descarte antes do modelo final.", 16, 170, { maxWidth: 178 });
@@ -912,10 +1030,31 @@ function App() {
 
   const renderSection = () => {
     switch (section) {
+      case "home":
+        return (
+          <HomeSection
+            database={database}
+            savedRecipes={savedRecipes}
+            project={project}
+            predictedHex={predictedHex}
+            calibratedHex={calibratedHex}
+            setSection={setSection}
+          />
+        );
       case "mixer":
         return (
           <MixerSection
             database={database}
+            selectedBrandId={selectedBrandId}
+            selectedBrandLine={selectedBrandLine}
+            selectedBrand={selectedBrand}
+            selectedBrandPaints={selectedBrandPaints}
+            setSelectedBrandId={setSelectedBrandId}
+            setSelectedBrandLine={setSelectedBrandLine}
+            updateMixerColorFromBrandPaint={updateMixerColorFromBrandPaint}
+            convertMixerToBrand={convertMixerToBrand}
+            brandEquivalentResult={brandEquivalentResult}
+            brandEquivalentColors={brandEquivalentColors}
             mixerColors={mixerColors}
             updateMixerColor={updateMixerColor}
             removeMixerColor={removeMixerColor}
@@ -999,6 +1138,29 @@ function App() {
           setQuickPreview({ label: saved.name, hex: saved.calibratedHex ?? saved.resultHex });
           setSection("mixer");
         }} shareSavedRecipe={shareSavedRecipe} />;
+      case "guide":
+        return (
+          <GuideSection
+            database={database}
+            techniques={techniqueResults}
+            techniqueSearch={techniqueSearch}
+            setTechniqueSearch={setTechniqueSearch}
+            activeTechniqueFilter={activeTechniqueFilter}
+            setActiveTechniqueFilter={setActiveTechniqueFilter}
+            favorites={favorites}
+            favoriteOnly={favoriteOnly}
+            setFavoriteOnly={setFavoriteOnly}
+            toggleFavorite={toggleFavorite}
+            paintTypes={paintTypeResults}
+            paintSearch={paintSearch}
+            setPaintSearch={setPaintSearch}
+            checklist={checklist}
+            setChecklist={setChecklist}
+            problems={problemResults}
+            problemSearch={problemSearch}
+            setProblemSearch={setProblemSearch}
+          />
+        );
       case "settings":
         return (
           <SettingsSection
@@ -1037,7 +1199,7 @@ function App() {
             </button>
           </div>
           <nav className="flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible">
-            {sections.map((item) => {
+            {primarySections.map((item) => {
               const Icon = item.icon;
               return (
                 <button
@@ -1106,8 +1268,237 @@ function App() {
   );
 }
 
+function HomeSection({
+  database,
+  savedRecipes,
+  project,
+  predictedHex,
+  calibratedHex,
+  setSection,
+}: {
+  database: PaintDatabase;
+  savedRecipes: SavedRecipe[];
+  project: ProjectState;
+  predictedHex: string;
+  calibratedHex: string;
+  setSection: (section: SectionId) => void;
+}) {
+  const completedTasks = project.tasks.filter((task) => task.done).length;
+  const quickCards = [
+    {
+      title: "Misturar cores",
+      text: "Escolha tintas, marcas, proporções e veja uma previsão aproximada.",
+      icon: FlaskConical,
+      action: () => setSection("mixer"),
+      label: "Abrir misturador",
+    },
+    {
+      title: "Usar receita pronta",
+      text: "Comece por osso, pele, metal, sangue, slime, candy, magia e mais.",
+      icon: BookOpen,
+      action: () => setSection("recipes"),
+      label: "Ver receitas",
+    },
+    {
+      title: "Organizar projeto",
+      text: "Guarde peça, primer, paleta, receitas e checklist em um só lugar.",
+      icon: ClipboardList,
+      action: () => setSection("project"),
+      label: "Abrir projeto",
+    },
+    {
+      title: "Consultar guia",
+      text: "Técnicas, fluxo para resina, tintas e solução de problemas.",
+      icon: Brush,
+      action: () => setSection("guide"),
+      label: "Abrir guia",
+    },
+  ];
+
+  return (
+    <div>
+      <section className="mb-4 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="p-5 sm:p-6">
+            <p className="text-xs font-bold uppercase tracking-widest text-teal-600 dark:text-teal-300">Solitario</p>
+            <h2 className="mt-2 max-w-3xl text-3xl font-black tracking-tight text-slate-950 dark:text-white">
+              Painel de cores para pintar resina 3D sem se perder no excesso de informação.
+            </h2>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+              O caminho principal é simples: misture, escolha uma receita, monte o projeto e consulte o guia só quando precisar.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <IconButton icon={FlaskConical} label="Começar no misturador" onClick={() => setSection("mixer")} />
+              <IconButton icon={BookOpen} label="Receitas rápidas" onClick={() => setSection("recipes")} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 border-t border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/60 lg:border-l lg:border-t-0">
+            <ColorSwatch hex={predictedHex} label="Mistura atual" large />
+            <ColorSwatch hex={calibratedHex} label="Calibrado" large />
+            <Stat label="Receitas" value={database.recipes.length} />
+            <Stat label="Marcas" value={paintBrands.length} />
+          </div>
+        </div>
+      </section>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {quickCards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <button
+              key={card.title}
+              type="button"
+              onClick={card.action}
+              className="rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-teal-400 hover:shadow-glow dark:border-slate-800 dark:bg-slate-900"
+            >
+              <span className="mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-teal-500 text-slate-950">
+                <Icon className="h-5 w-5" />
+              </span>
+              <h3 className="text-lg font-black text-slate-950 dark:text-white">{card.title}</h3>
+              <p className="mt-2 min-h-16 text-sm leading-6 text-slate-600 dark:text-slate-300">{card.text}</p>
+              <span className="mt-3 inline-block text-sm font-bold text-teal-700 dark:text-teal-300">{card.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+        <DataCard>
+          <h3 className="text-lg font-black">Seu progresso</h3>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+            {savedRecipes.length} receitas salvas. Projeto atual: {completedTasks}/{project.tasks.length} etapas concluídas.
+          </p>
+        </DataCard>
+        <DataCard className="lg:col-span-2">
+          <h3 className="text-lg font-black">O que eu simplifiquei</h3>
+          <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            Técnicas, tipos de tinta, fluxo de resina e problemas agora ficam dentro de Guia. O menu principal mostra só o que você usa toda hora.
+          </p>
+        </DataCard>
+      </div>
+    </div>
+  );
+}
+
+function GuideSection({
+  database,
+  techniques,
+  techniqueSearch,
+  setTechniqueSearch,
+  activeTechniqueFilter,
+  setActiveTechniqueFilter,
+  favorites,
+  favoriteOnly,
+  setFavoriteOnly,
+  toggleFavorite,
+  paintTypes,
+  paintSearch,
+  setPaintSearch,
+  checklist,
+  setChecklist,
+  problems,
+  problemSearch,
+  setProblemSearch,
+}: {
+  database: PaintDatabase;
+  techniques: PaintDatabase["techniques"];
+  techniqueSearch: string;
+  setTechniqueSearch: (value: string) => void;
+  activeTechniqueFilter: string;
+  setActiveTechniqueFilter: (value: string) => void;
+  favorites: FavoriteState;
+  favoriteOnly: { recipes: boolean; techniques: boolean; palettes: boolean };
+  setFavoriteOnly: React.Dispatch<React.SetStateAction<{ recipes: boolean; techniques: boolean; palettes: boolean }>>;
+  toggleFavorite: (kind: keyof FavoriteState, id: string) => void;
+  paintTypes: PaintDatabase["paintTypes"];
+  paintSearch: string;
+  setPaintSearch: (value: string) => void;
+  checklist: Record<string, boolean>;
+  setChecklist: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+  problems: PaintDatabase["problems"];
+  problemSearch: string;
+  setProblemSearch: (value: string) => void;
+}) {
+  const [tab, setTab] = useState<"essencial" | "tecnicas" | "tintas" | "resina" | "problemas">("essencial");
+  const tabs = [
+    { id: "essencial", label: "Essencial", icon: Sparkles },
+    { id: "tecnicas", label: "Técnicas", icon: Brush },
+    { id: "tintas", label: "Tintas", icon: PaintBucket },
+    { id: "resina", label: "Resina 3D", icon: ShieldCheck },
+    { id: "problemas", label: "Problemas", icon: Wrench },
+  ] as const;
+
+  return (
+    <div>
+      <SectionTitle icon={Brush} title="Guia" subtitle="Consulta rápida. O material mais denso ficou aqui para não atrapalhar o fluxo principal." />
+      <div className="mb-4 flex flex-wrap gap-2">
+        {tabs.map((item) => (
+          <IconButton key={item.id} icon={item.icon} label={item.label} active={tab === item.id} onClick={() => setTab(item.id)} />
+        ))}
+      </div>
+      {tab === "essencial" ? <EssentialGuide database={database} /> : null}
+      {tab === "tecnicas" ? (
+        <TechniquesSection
+          techniques={techniques}
+          search={techniqueSearch}
+          setSearch={setTechniqueSearch}
+          activeFilter={activeTechniqueFilter}
+          setActiveFilter={setActiveTechniqueFilter}
+          favorites={favorites.techniques}
+          favoriteOnly={favoriteOnly.techniques}
+          setFavoriteOnly={(value) => setFavoriteOnly((current) => ({ ...current, techniques: value }))}
+          toggleFavorite={(id) => toggleFavorite("techniques", id)}
+        />
+      ) : null}
+      {tab === "tintas" ? <PaintTypesSection paintTypes={paintTypes} search={paintSearch} setSearch={setPaintSearch} /> : null}
+      {tab === "resina" ? <ResinSection database={database} checklist={checklist} setChecklist={setChecklist} /> : null}
+      {tab === "problemas" ? <ProblemsSection problems={problems} search={problemSearch} setSearch={setProblemSearch} safety={database.safety} /> : null}
+    </div>
+  );
+}
+
+function EssentialGuide({ database }: { database: PaintDatabase }) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <DataCard>
+        <h3 className="mb-3 text-lg font-black">Fluxo seguro para resina</h3>
+        <ol className="space-y-2">
+          {database.resinFlow.paintingFlow.slice(0, 8).map((item, index) => (
+            <li key={item} className="flex gap-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-teal-500 text-xs font-black text-slate-950">{index + 1}</span>
+              <span>{item}</span>
+            </li>
+          ))}
+        </ol>
+      </DataCard>
+      <DataCard>
+        <h3 className="mb-3 text-lg font-black">Regras que realmente importam</h3>
+        <RuleBlock title="Mistura" items={database.mixingRules.basics.slice(0, 5)} />
+      </DataCard>
+      <DataCard>
+        <h3 className="mb-3 text-lg font-black">Ajustes rápidos</h3>
+        <InfoList title="Na bancada" items={database.mixingRules.quickAdjustments.slice(0, 6)} />
+      </DataCard>
+      <DataCard>
+        <h3 className="mb-3 text-lg font-black">Segurança</h3>
+        <InfoList title="Sempre" items={database.safety.slice(0, 6)} />
+      </DataCard>
+    </div>
+  );
+}
+
 function MixerSection(props: {
   database: PaintDatabase;
+  selectedBrandId: string;
+  selectedBrandLine: string;
+  selectedBrand: (typeof paintBrands)[number];
+  selectedBrandPaints: (typeof paintBrands)[number]["paints"];
+  setSelectedBrandId: (id: string) => void;
+  setSelectedBrandLine: (line: string) => void;
+  updateMixerColorFromBrandPaint: (id: string, brandId: string, paintId: string) => void;
+  convertMixerToBrand: () => void;
+  brandEquivalentResult: (typeof paintBrands)[number]["paints"][number];
+  brandEquivalentColors: Array<{ color: MixerColor; paint: (typeof paintBrands)[number]["paints"][number] }>;
   mixerColors: MixerColor[];
   updateMixerColor: (id: string, patch: Partial<MixerColor>) => void;
   removeMixerColor: (id: string) => void;
@@ -1146,6 +1537,16 @@ function MixerSection(props: {
 }) {
   const {
     database,
+    selectedBrandId,
+    selectedBrandLine,
+    selectedBrand,
+    selectedBrandPaints,
+    setSelectedBrandId,
+    setSelectedBrandLine,
+    updateMixerColorFromBrandPaint,
+    convertMixerToBrand,
+    brandEquivalentResult,
+    brandEquivalentColors,
     mixerColors,
     updateMixerColor,
     removeMixerColor,
@@ -1201,6 +1602,58 @@ function MixerSection(props: {
         <strong>Resultado aproximado.</strong> Faça teste em paleta, colher plástica, pedaço de suporte de resina ou peça de descarte antes de aplicar no modelo final.
       </div>
 
+      <section className="mb-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-black text-slate-950 dark:text-white">Misturar por marca</h3>
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              Escolha uma marca/linha para filtrar tintas reais e converter a mistura para equivalentes próximos.
+            </p>
+          </div>
+          <IconButton icon={PaintBucket} label="Converter mistura para marca" onClick={convertMixerToBrand} />
+        </div>
+        <div className="grid gap-3 md:grid-cols-[220px_220px_1fr]">
+          <div>
+            <FieldLabel>Marca alvo</FieldLabel>
+            <select
+              value={selectedBrandId}
+              onChange={(event) => {
+                setSelectedBrandId(event.target.value);
+                setSelectedBrandLine("todas");
+              }}
+              className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+            >
+              {paintBrands.map((brand) => (
+                <option key={brand.id} value={brand.id}>
+                  {brand.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <FieldLabel>Linha</FieldLabel>
+            <select value={selectedBrandLine} onChange={(event) => setSelectedBrandLine(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+              {brandLineOptions(selectedBrandId).map((line) => (
+                <option key={line} value={line}>
+                  {line === "todas" ? "Todas as linhas" : line}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+            <div className="mb-2 text-sm font-bold text-slate-950 dark:text-white">Equivalente mais próximo do resultado</div>
+            <div className="grid gap-2 sm:grid-cols-[90px_1fr]">
+              <ColorSwatch hex={brandEquivalentResult.hex} label={brandEquivalentResult.name} />
+              <div className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                <strong>{selectedBrand.name}</strong> / {brandEquivalentResult.line}
+                <br />
+                Tipo: {brandEquivalentResult.type}. Opacidade: {brandEquivalentResult.opacity}. Acabamento: {brandEquivalentResult.finish}.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
         <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -1217,12 +1670,25 @@ function MixerSection(props: {
                   <div className="grid gap-3 lg:grid-cols-[80px_minmax(160px,1.2fr)_minmax(180px,1fr)_minmax(170px,1fr)]">
                     <ColorSwatch hex={color.hex} label={`Cor ${index + 1}`} />
                     <div className="space-y-2">
+                      <FieldLabel>Tinta da marca</FieldLabel>
+                      <select
+                        value={color.paintId ?? ""}
+                        onChange={(event) => updateMixerColorFromBrandPaint(color.id, selectedBrandId, event.target.value)}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                      >
+                        <option value="">Selecionar em {selectedBrand.name}</option>
+                        {selectedBrandPaints.map((paint) => (
+                          <option key={paint.id} value={paint.id}>
+                            {paint.name} · {paint.line}
+                          </option>
+                        ))}
+                      </select>
                       <FieldLabel>Nome comum / banco</FieldLabel>
                       <select
                         value={color.sourceId ?? "custom"}
                         onChange={(event) => {
                           const selected = database.colors.find((entry) => entry.id === event.target.value);
-                          if (selected) updateMixerColor(color.id, createMixerColor(selected, color.parts));
+                          if (selected) updateMixerColor(color.id, { ...createMixerColor(selected, color.parts), paintId: undefined, brandId: undefined, brandName: undefined, line: undefined });
                         }}
                         className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
                       >
@@ -1235,10 +1701,15 @@ function MixerSection(props: {
                       </select>
                       <input
                         value={color.name}
-                        onChange={(event) => updateMixerColor(color.id, { name: event.target.value, sourceId: undefined })}
+                        onChange={(event) => updateMixerColor(color.id, { name: event.target.value, sourceId: undefined, paintId: undefined })}
                         className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
                         placeholder="Nome da cor"
                       />
+                      {color.brandName ? (
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          {color.brandName} / {color.line}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="space-y-2">
                       <FieldLabel>Hex / RGB / HSL</FieldLabel>
@@ -1246,12 +1717,12 @@ function MixerSection(props: {
                         <input
                           type="color"
                           value={normalizeHex(color.hex)}
-                          onChange={(event) => updateMixerColor(color.id, { hex: event.target.value, sourceId: undefined })}
+                          onChange={(event) => updateMixerColor(color.id, { hex: event.target.value, sourceId: undefined, paintId: undefined })}
                           className="h-10 w-full rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-700 dark:bg-slate-950"
                         />
                         <input
                           value={color.hex}
-                          onChange={(event) => updateMixerColor(color.id, { hex: normalizeHex(event.target.value), sourceId: undefined })}
+                          onChange={(event) => updateMixerColor(color.id, { hex: normalizeHex(event.target.value), sourceId: undefined, paintId: undefined })}
                           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm dark:border-slate-700 dark:bg-slate-950"
                         />
                       </div>
@@ -1265,7 +1736,7 @@ function MixerSection(props: {
                             value={Math.round(rgb[channel])}
                             onChange={(event) => {
                               const next = { ...rgb, [channel]: Number(event.target.value) };
-                              updateMixerColor(color.id, { hex: rgbToHex(next), sourceId: undefined });
+                              updateMixerColor(color.id, { hex: rgbToHex(next), sourceId: undefined, paintId: undefined });
                             }}
                             className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
                             title={channel.toUpperCase()}
@@ -1316,6 +1787,9 @@ function MixerSection(props: {
                           ))}
                         </select>
                       </div>
+                      <div className="rounded-lg border border-slate-200 p-2 text-xs leading-5 text-slate-600 dark:border-slate-800 dark:text-slate-300">
+                        Equivalente {selectedBrand.name}: <strong>{brandEquivalentColors[index]?.paint.name}</strong> / {brandEquivalentColors[index]?.paint.line}
+                      </div>
                       <button
                         type="button"
                         title="Remover cor"
@@ -1334,12 +1808,13 @@ function MixerSection(props: {
 
           <div className="mt-4 grid gap-3 md:grid-cols-4">
             <div className="space-y-2">
-              <FieldLabel>Marca / linha fictícia</FieldLabel>
-              <select className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
-                <option>Genérica Hobby Pro</option>
-                <option>Studio Resin Color</option>
-                <option>Mini Painter Acryl</option>
-                <option>AirLine Lacquer</option>
+              <FieldLabel>Marca alvo da receita</FieldLabel>
+              <select value={selectedBrandId} onChange={(event) => setSelectedBrandId(event.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+                {paintBrands.map((brand) => (
+                  <option key={brand.id} value={brand.id}>
+                    {brand.name}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="space-y-2">
@@ -1472,9 +1947,17 @@ function MixerSection(props: {
       <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="mb-3 flex items-center gap-2">
           <SlidersHorizontal className="h-5 w-5 text-teal-500" />
-          <h3 className="text-lg font-black">Ações rápidas</h3>
+          <h3 className="text-lg font-black">Atalhos principais</h3>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="mb-3 flex flex-wrap gap-2">
+          <IconButton icon={Save} label="Salvar" onClick={saveRecipe} />
+          <IconButton icon={ClipboardList} label="Projeto" onClick={addCurrentMixToProject} />
+          <IconButton icon={Palette} label="Paleta" onClick={() => { setPaletteBase(predictedHex); setSection("palettes"); }} />
+          <IconButton icon={Link} label="Compartilhar" onClick={shareCurrentRecipe} />
+        </div>
+        <details className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+          <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-200">Mais ações</summary>
+          <div className="mt-3 flex flex-wrap gap-2">
           <IconButton icon={Save} label="Salvar receita" onClick={saveRecipe} />
           <IconButton icon={Copy} label="Duplicar" onClick={duplicateMixer} />
           <IconButton icon={FileJson} label="Exportar JSON" onClick={exportCurrentJson} />
@@ -1503,7 +1986,8 @@ function MixerSection(props: {
           <IconButton icon={Snowflake} label="Mais frio" onClick={() => applyQuickAction("Mais frio", variations.cooler)} />
           <IconButton icon={Sparkles} label="Mais saturado" onClick={() => applyQuickAction("Mais saturado", variations.saturated)} />
           <IconButton icon={Contrast} label="Mais apagado" onClick={() => applyQuickAction("Mais apagado", variations.desaturated)} />
-        </div>
+          </div>
+        </details>
       </section>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
@@ -1524,7 +2008,7 @@ function MixerSection(props: {
           </div>
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <section className="hidden rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <h3 className="mb-3 text-lg font-black">Regras de mistura de cores</h3>
           <div className="grid gap-4 md:grid-cols-2">
             <RuleBlock title="Misturas básicas" items={seedDatabase.mixingRules.basics} />

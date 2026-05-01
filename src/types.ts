@@ -11,6 +11,28 @@ export type ColorEntry = {
   uses: string[];
 };
 
+export type BrandPaint = {
+  id: string;
+  name: string;
+  hex: string;
+  family: string;
+  line: string;
+  type: string;
+  finish: string;
+  opacity: string;
+  notes?: string;
+};
+
+export type PaintBrand = {
+  id: string;
+  name: string;
+  country?: string;
+  website?: string;
+  bestFor: string[];
+  lines: string[];
+  paints: BrandPaint[];
+};
+
 export type PaintType = {
   id: string;
   name: string;
@@ -104,6 +126,10 @@ export type PaintDatabase = {
 export type MixerColor = {
   id: string;
   sourceId?: string;
+  brandId?: string;
+  brandName?: string;
+  paintId?: string;
+  line?: string;
   name: string;
   hex: string;
   parts: number;
