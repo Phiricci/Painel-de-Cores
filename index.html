@@ -5,17 +5,52 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Solitario - Painel de Cores 3D: misturador, receitas, técnicas e fluxo para pintura de impressões 3D em resina."
+      content="Misture tintas, escolha marcas, copie HEX/RGB/HSL, gere paletas e siga receitas para pintura de miniaturas, bustos e impressões 3D em resina."
     />
+    <meta name="keywords" content="pintura de miniaturas, resina 3D, paleta de cores, mistura de tintas, Citadel, Vallejo, Acrilex, Army Painter" />
+    <meta name="author" content="Solitario" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="pt_BR" />
+    <meta property="og:title" content="Solitario | Painel de Cores 3D Interativo" />
+    <meta
+      property="og:description"
+      content="Crie misturas, paletas e receitas de pintura para impressões 3D em resina com marcas, proporções e códigos de cor."
+    />
+    <meta property="og:image" content="/og-image.svg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Solitario | Painel de Cores 3D Interativo" />
+    <meta name="twitter:description" content="Misturador, paletas, receitas e guia prático para pintura de miniaturas e resina 3D." />
+    <meta name="twitter:image" content="/og-image.svg" />
     <meta name="theme-color" content="#0f172a" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Cores 3D" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon.svg" />
-    <title>Solitario - Painel de Cores 3D</title>
+    <title>Solitario | Painel de Cores 3D Interativo</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Solitario | Painel de Cores 3D Interativo",
+        "applicationCategory": "DesignApplication",
+        "operatingSystem": "Web",
+        "description": "Ferramenta para misturar tintas, gerar paletas e organizar receitas de pintura para miniaturas e impressões 3D em resina.",
+        "inLanguage": "pt-BR",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "BRL" }
+      }
+    </script>
   </head>
   <body>
+    <noscript>
+      <main>
+        <h1>Solitario | Painel de Cores 3D Interativo</h1>
+        <p>
+          Ferramenta para misturar tintas, gerar paletas e organizar receitas de pintura para miniaturas, bustos,
+          dioramas e impressões 3D em resina. Ative o JavaScript para usar o misturador interativo.
+        </p>
+      </main>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

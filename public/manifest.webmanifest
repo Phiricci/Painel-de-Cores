@@ -1,7 +1,7 @@
 {
-  "name": "Solitario - Painel de Cores 3D",
-  "short_name": "Cores 3D",
-  "description": "Painel de mistura, receitas, técnicas e fluxo para pintura de impressões 3D em resina.",
+  "name": "Solitario | Painel de Cores 3D Interativo",
+  "short_name": "Solitario 3D",
+  "description": "Misturador, paletas, receitas e guia prático para pintura de miniaturas e impressões 3D em resina.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

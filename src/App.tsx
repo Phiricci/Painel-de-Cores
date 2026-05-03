@@ -268,6 +268,43 @@ const copyToClipboard = async (text: string) => {
   await navigator.clipboard?.writeText(text);
 };
 
+const colorFormats = (hex: string) => {
+  const normalized = normalizeHex(hex);
+  const rgb = hexToRgb(normalized);
+  const hsl = rgbToHsl(rgb);
+  return {
+    hex: normalized.toUpperCase(),
+    rgb: `rgb(${Math.round(rgb.r)}, ${Math.round(rgb.g)}, ${Math.round(rgb.b)})`,
+    hsl: `hsl(${Math.round(hsl.h)} ${Math.round(hsl.s)}% ${Math.round(hsl.l)}%)`,
+    css: `--cor-pintura: ${normalized.toUpperCase()};`,
+  };
+};
+
+const channelLuminance = (value: number) => {
+  const normalized = value / 255;
+  return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+};
+
+const relativeLuminance = (hex: string) => {
+  const rgb = hexToRgb(hex);
+  return 0.2126 * channelLuminance(rgb.r) + 0.7152 * channelLuminance(rgb.g) + 0.0722 * channelLuminance(rgb.b);
+};
+
+const contrastRatio = (a: string, b: string) => {
+  const first = relativeLuminance(a);
+  const second = relativeLuminance(b);
+  const light = Math.max(first, second);
+  const dark = Math.min(first, second);
+  return (light + 0.05) / (dark + 0.05);
+};
+
+const contrastLabel = (ratio: number) => {
+  if (ratio >= 7) return "AAA";
+  if (ratio >= 4.5) return "AA";
+  if (ratio >= 3) return "Grande";
+  return "Baixo";
+};
+
 const encodeSharePayload = (payload: ShareRecipePayload) => {
   const json = JSON.stringify(payload);
   const bytes = new TextEncoder().encode(json);
@@ -459,6 +496,82 @@ function ColorSwatch({ hex, label, large = false }: { hex: string; label?: strin
         {label ? <div className="truncate text-xs font-bold">{label}</div> : null}
         <div className="font-mono text-xs font-semibold uppercase">{hex}</div>
       </div>
+    </div>
+  );
+}
+
+function ColorCodePanel({ hex, label = "Cor calibrada" }: { hex: string; label?: string }) {
+  const [copied, setCopied] = useState("");
+  const formats = colorFormats(hex);
+  const whiteContrast = contrastRatio(hex, "#ffffff");
+  const blackContrast = contrastRatio(hex, "#000000");
+  const bestText = whiteContrast >= blackContrast ? "branco" : "preto";
+  const items = [
+    ["HEX", formats.hex],
+    ["RGB", formats.rgb],
+    ["HSL", formats.hsl],
+    ["CSS", formats.css],
+  ] as const;
+
+  const handleCopy = async (formatLabel: string, value: string) => {
+    await copyToClipboard(value);
+    setCopied(formatLabel);
+    window.setTimeout(() => setCopied(""), 1400);
+  };
+
+  return (
+    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-black text-slate-950 dark:text-white">{label}</div>
+          <div className="text-xs text-slate-500 dark:text-slate-400">Toque para copiar códigos de cor.</div>
+        </div>
+        <span className="rounded-md bg-slate-100 px-2 py-1 font-mono text-xs font-bold uppercase text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+          {formats.hex}
+        </span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {items.map(([formatLabel, value]) => (
+          <button
+            key={formatLabel}
+            type="button"
+            onClick={() => handleCopy(formatLabel, value)}
+            className="flex min-h-11 items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-left text-xs transition hover:border-teal-400 dark:border-slate-800 dark:bg-slate-950"
+          >
+            <span>
+              <span className="block font-black text-slate-950 dark:text-white">{formatLabel}</span>
+              <span className="block max-w-[190px] truncate font-mono text-slate-600 dark:text-slate-300">{value}</span>
+            </span>
+            <span className="flex items-center gap-1 text-teal-700 dark:text-teal-300">
+              <Copy className="h-3.5 w-3.5" />
+              {copied === formatLabel ? "copiado" : "copiar"}
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <ContrastSample label="Texto branco" ratio={whiteContrast} background={hex} color="#ffffff" />
+        <ContrastSample label="Texto preto" ratio={blackContrast} background={hex} color="#000000" />
+        <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm dark:border-slate-800 dark:bg-slate-950">
+          <div className="flex items-center gap-2 font-bold text-slate-950 dark:text-white">
+            <Contrast className="h-4 w-4 text-teal-500" />
+            Melhor leitura
+          </div>
+          <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">
+            Use texto <strong>{bestText}</strong> sobre esta cor. Contraste é referência digital, não substitui teste na peça.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ContrastSample({ label, ratio, background, color }: { label: string; ratio: number; background: string; color: string }) {
+  return (
+    <div className="rounded-lg border border-white/20 p-3" style={{ background, color }}>
+      <div className="text-xs font-black">{label}</div>
+      <div className="mt-1 font-mono text-sm font-bold">{ratio.toFixed(1)}:1</div>
+      <div className="mt-2 inline-flex rounded-md bg-black/15 px-2 py-1 text-[11px] font-black uppercase">{contrastLabel(ratio)}</div>
     </div>
   );
 }
@@ -1286,29 +1399,36 @@ function HomeSection({
   const completedTasks = project.tasks.filter((task) => task.done).length;
   const quickCards = [
     {
-      title: "Misturar cores",
-      text: "Escolha tintas, marcas, proporções e veja uma previsão aproximada.",
+      title: "Criar combinação",
+      text: "Misture até 5 tintas, ajuste gotas/partes e compare previsão, primer e camadas.",
       icon: FlaskConical,
       action: () => setSection("mixer"),
       label: "Abrir misturador",
     },
     {
-      title: "Usar receita pronta",
-      text: "Comece por osso, pele, metal, sangue, slime, candy, magia e mais.",
+      title: "Explorar receitas",
+      text: "Comece por osso, pele, couro, metal, sangue, slime, candy, magia e bases.",
       icon: BookOpen,
       action: () => setSection("recipes"),
       label: "Ver receitas",
     },
     {
+      title: "Gerar paletas",
+      text: "Monte paletas monocromáticas, complementares, sci-fi, horror, militar e fantasia.",
+      icon: Palette,
+      action: () => setSection("palettes"),
+      label: "Abrir paletas",
+    },
+    {
       title: "Organizar projeto",
-      text: "Guarde peça, primer, paleta, receitas e checklist em um só lugar.",
+      text: "Guarde peça, primer, paleta, receitas e checklist antes de pintar o modelo final.",
       icon: ClipboardList,
       action: () => setSection("project"),
       label: "Abrir projeto",
     },
     {
       title: "Consultar guia",
-      text: "Técnicas, fluxo para resina, tintas e solução de problemas.",
+      text: "Veja técnicas, tipos de tinta, fluxo para resina, segurança e solução de problemas.",
       icon: Brush,
       action: () => setSection("guide"),
       label: "Abrir guia",
@@ -1321,15 +1441,23 @@ function HomeSection({
         <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="p-5 sm:p-6">
             <p className="text-xs font-bold uppercase tracking-widest text-teal-600 dark:text-teal-300">Solitario</p>
-            <h2 className="mt-2 max-w-3xl text-3xl font-black tracking-tight text-slate-950 dark:text-white">
-              Painel de cores para pintar resina 3D sem se perder no excesso de informação.
-            </h2>
+            <h1 className="mt-2 max-w-3xl text-3xl font-black tracking-tight text-slate-950 dark:text-white">
+              Painel de Cores 3D Interativo para pintura de resina, miniaturas e action figures.
+            </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-              O caminho principal é simples: misture, escolha uma receita, monte o projeto e consulte o guia só quando precisar.
+              Misture tintas por marca, copie HEX/RGB/HSL, gere paletas visuais e monte receitas práticas antes de encostar o pincel na peça final.
             </p>
             <div className="mt-5 flex flex-wrap gap-2">
-              <IconButton icon={FlaskConical} label="Começar no misturador" onClick={() => setSection("mixer")} />
-              <IconButton icon={BookOpen} label="Receitas rápidas" onClick={() => setSection("recipes")} />
+              <IconButton icon={FlaskConical} label="Criar combinação" onClick={() => setSection("mixer")} />
+              <IconButton icon={BookOpen} label="Explorar receitas" onClick={() => setSection("recipes")} />
+              <IconButton icon={Palette} label="Gerar paleta" onClick={() => setSection("palettes")} />
+            </div>
+            <div className="mt-5 grid gap-2 text-sm text-slate-600 dark:text-slate-300 sm:grid-cols-3">
+              {["1. Escolha marcas e cores", "2. Ajuste proporções", "3. Salve ou exporte"].map((step) => (
+                <div key={step} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-bold dark:border-slate-800 dark:bg-slate-950">
+                  {step}
+                </div>
+              ))}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3 border-t border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/60 lg:border-l lg:border-t-0">
@@ -1341,7 +1469,7 @@ function HomeSection({
         </div>
       </section>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {quickCards.map((card) => {
           const Icon = card.icon;
           return (
@@ -1370,9 +1498,9 @@ function HomeSection({
           </p>
         </DataCard>
         <DataCard className="lg:col-span-2">
-          <h3 className="text-lg font-black">O que eu simplifiquei</h3>
+          <h3 className="text-lg font-black">Fluxo recomendado</h3>
           <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-            Técnicas, tipos de tinta, fluxo de resina e problemas agora ficam dentro de Guia. O menu principal mostra só o que você usa toda hora.
+            Use o misturador para achar a cor, adapte para sua marca, escolha uma receita pronta e salve no Projeto Atual. O guia fica separado para consulta, sem atrapalhar a pintura.
           </p>
         </DataCard>
       </div>
@@ -1886,6 +2014,10 @@ function MixerSection(props: {
                 title="Ajuste manual do resultado calibrado"
               />
             </div>
+          </div>
+
+          <div className="mt-3">
+            <ColorCodePanel hex={calibratedHex} label="Códigos e contraste do resultado calibrado" />
           </div>
 
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
