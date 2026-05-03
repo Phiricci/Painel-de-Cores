@@ -1,5 +1,5 @@
-const CACHE_NAME = "solitario-cores-3d-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
+const CACHE_NAME = "solitario-cores-3d-v2";
+const APP_SHELL = ["/manifest.webmanifest", "/icon.svg", "/og-image.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
@@ -15,18 +15,41 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
+});
+
+const networkFirst = async (request) => {
+  try {
+    const response = await fetch(request, { cache: "no-store" });
+    if (response.ok) {
+      const clone = response.clone();
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(request, clone);
+    }
+    return response;
+  } catch {
+    return (await caches.match(request)) || caches.match("/");
+  }
+};
+
+const cacheFirst = async (request) => {
+  const cached = await caches.match(request);
+  if (cached) return cached;
+  const response = await fetch(request);
+  if (response.ok && new URL(request.url).origin === self.location.origin) {
+    const clone = response.clone();
+    const cache = await caches.open(CACHE_NAME);
+    await cache.put(request, clone);
+  }
+  return response;
+};
+
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request)
-        .then((response) => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          return response;
-        })
-        .catch(() => caches.match("/"));
-    }),
-  );
+  if (event.request.mode === "navigate" || event.request.destination === "document") {
+    event.respondWith(networkFirst(event.request));
+    return;
+  }
+  event.respondWith(cacheFirst(event.request));
 });
