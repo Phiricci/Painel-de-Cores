@@ -150,13 +150,10 @@ const sections: Array<{ id: SectionId; label: string; icon: LucideIcon }> = [
 
 const primarySections: Array<{ id: SectionId; label: string; icon: LucideIcon }> = [
   { id: "home", label: "Início", icon: Home },
-  { id: "mixer", label: "Misturador", icon: FlaskConical },
+  { id: "mixer", label: "Criar cor", icon: Pipette },
   { id: "recipes", label: "Receitas", icon: BookOpen },
-  { id: "palettes", label: "Paletas", icon: Palette },
-  { id: "project", label: "Projeto Atual", icon: ClipboardList },
   { id: "mine", label: "Salvos", icon: Save },
-  { id: "guide", label: "Guia", icon: Brush },
-  { id: "settings", label: "Ajustes", icon: Settings },
+  { id: "settings", label: "Mais", icon: Settings },
 ];
 
 const primerOptions = [
@@ -1476,39 +1473,25 @@ function HomeSection({
   const completedTasks = project.tasks.filter((task) => task.done).length;
   const quickCards = [
     {
-      title: "Criar combinação",
-      text: "Misture até 5 tintas, ajuste gotas/partes e compare previsão, primer e camadas.",
-      icon: FlaskConical,
+      title: "Tenho uma foto",
+      text: "Envie uma imagem, clique na cor e receba uma mistura aproximada pela marca escolhida.",
+      icon: ImageIcon,
       action: () => setSection("mixer"),
-      label: "Abrir misturador",
+      label: "Pegar cor",
     },
     {
-      title: "Explorar receitas",
-      text: "Comece por osso, pele, couro, metal, sangue, slime, candy, magia e bases.",
+      title: "Quero receita pronta",
+      text: "Escolha pele, osso, metal, couro, sangue, slime, magia, candy e outros efeitos.",
       icon: BookOpen,
       action: () => setSection("recipes"),
       label: "Ver receitas",
     },
     {
-      title: "Gerar paletas",
-      text: "Monte paletas monocromáticas, complementares, sci-fi, horror, militar e fantasia.",
-      icon: Palette,
-      action: () => setSection("palettes"),
-      label: "Abrir paletas",
-    },
-    {
-      title: "Organizar projeto",
-      text: "Guarde peça, primer, paleta, receitas e checklist antes de pintar o modelo final.",
-      icon: ClipboardList,
-      action: () => setSection("project"),
-      label: "Abrir projeto",
-    },
-    {
-      title: "Consultar guia",
-      text: "Veja técnicas, tipos de tinta, fluxo para resina, segurança e solução de problemas.",
-      icon: Brush,
-      action: () => setSection("guide"),
-      label: "Abrir guia",
+      title: "Já salvei algo",
+      text: "Volte nas suas misturas salvas, copie proporções e compartilhe receitas.",
+      icon: Save,
+      action: () => setSection("mine"),
+      label: "Abrir salvos",
     },
   ];
 
@@ -1519,18 +1502,17 @@ function HomeSection({
           <div className="p-5 sm:p-6">
             <p className="text-xs font-bold uppercase tracking-widest text-teal-600 dark:text-teal-300">Solitario</p>
             <h1 className="mt-2 max-w-3xl text-3xl font-black tracking-tight text-slate-950 dark:text-white">
-              Painel de Cores 3D Interativo para pintura de resina, miniaturas e action figures.
+              Escolha uma cor e transforme em receita de tinta.
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-              Misture tintas por marca, copie HEX/RGB/HSL, gere paletas visuais e monte receitas práticas antes de encostar o pincel na peça final.
+              O fluxo principal ficou simples: foto ou cor alvo, marca desejada, mistura aproximada e salvar.
             </p>
             <div className="mt-5 flex flex-wrap gap-2">
-              <IconButton icon={FlaskConical} label="Criar combinação" onClick={() => setSection("mixer")} />
-              <IconButton icon={BookOpen} label="Explorar receitas" onClick={() => setSection("recipes")} />
-              <IconButton icon={Palette} label="Gerar paleta" onClick={() => setSection("palettes")} />
+              <IconButton icon={ImageIcon} label="Pegar cor de foto" onClick={() => setSection("mixer")} />
+              <IconButton icon={BookOpen} label="Receita pronta" onClick={() => setSection("recipes")} />
             </div>
             <div className="mt-5 grid gap-2 text-sm text-slate-600 dark:text-slate-300 sm:grid-cols-3">
-              {["1. Escolha marcas e cores", "2. Ajuste proporções", "3. Salve ou exporte"].map((step) => (
+              {["1. Escolha a marca", "2. Clique na cor", "3. Aplique a receita"].map((step) => (
                 <div key={step} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-bold dark:border-slate-800 dark:bg-slate-950">
                   {step}
                 </div>
@@ -1546,7 +1528,7 @@ function HomeSection({
         </div>
       </section>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-3">
         {quickCards.map((card) => {
           const Icon = card.icon;
           return (
@@ -1569,15 +1551,15 @@ function HomeSection({
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <DataCard>
-          <h3 className="text-lg font-black">Seu progresso</h3>
+          <h3 className="text-lg font-black">Seu painel</h3>
           <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
             {savedRecipes.length} receitas salvas. Projeto atual: {completedTasks}/{project.tasks.length} etapas concluídas.
           </p>
         </DataCard>
         <DataCard className="lg:col-span-2">
-          <h3 className="text-lg font-black">Fluxo recomendado</h3>
+          <h3 className="text-lg font-black">Modo plug and play</h3>
           <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-            Use o misturador para achar a cor, adapte para sua marca, escolha uma receita pronta e salve no Projeto Atual. O guia fica separado para consulta, sem atrapalhar a pintura.
+            As ferramentas avançadas continuam existindo, mas agora ficam escondidas. Comece pela foto ou por uma receita pronta e ajuste só se precisar.
           </p>
         </DataCard>
       </div>
@@ -1774,7 +1756,7 @@ function PhotoColorPickerSection({
         <div>
           <h3 className="flex items-center gap-2 text-lg font-black text-slate-950 dark:text-white">
             <Pipette className="h-5 w-5 text-teal-500" />
-            Pegar cor de foto
+            2. Pegue a cor da foto
           </h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
             Envie uma imagem, clique/toque na cor desejada e gere uma receita aproximada usando {selectedBrand.name}
@@ -1955,26 +1937,26 @@ function MixerSection(props: {
   return (
     <div>
       <SectionTitle
-        icon={FlaskConical}
-        title="Misturador"
-        subtitle="Mistura visual, perceptual e subtrativa para tintas reais, com ajuste manual para calibrar o que aconteceu na bancada."
+        icon={Pipette}
+        title="Criar cor"
+        subtitle="Escolha a marca, pegue uma cor de foto ou use ajuste manual só se precisar."
       />
 
       <div className="mb-4 rounded-lg border border-amber-300/60 bg-amber-100 p-4 text-sm leading-6 text-amber-950 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
-        <strong>Resultado aproximado.</strong> Faça teste em paleta, colher plástica, pedaço de suporte de resina ou peça de descarte antes de aplicar no modelo final.
+        <strong>Receita aproximada.</strong> Use como ponto de partida e teste em paleta, suporte de resina ou peça de descarte antes do modelo final.
       </div>
 
       <section className="mb-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-lg font-black text-slate-950 dark:text-white">Misturar por marca</h3>
+            <h3 className="text-lg font-black text-slate-950 dark:text-white">1. Escolha a marca</h3>
             <p className="text-sm text-slate-600 dark:text-slate-300">
-              Escolha uma marca/linha para filtrar tintas reais e converter a mistura para equivalentes próximos.
+              A receita da foto e as sugestões vão usar apenas tintas dessa marca/linha.
             </p>
           </div>
-          <IconButton icon={PaintBucket} label="Converter mistura para marca" onClick={convertMixerToBrand} />
+          <span className="rounded-md bg-teal-100 px-2 py-1 text-xs font-black uppercase text-teal-900 dark:bg-teal-500/20 dark:text-teal-100">plug and play</span>
         </div>
-        <div className="grid gap-3 md:grid-cols-[220px_220px_1fr]">
+        <div className="grid gap-3 md:grid-cols-2">
           <div>
             <FieldLabel>Marca alvo</FieldLabel>
             <select
@@ -2002,7 +1984,7 @@ function MixerSection(props: {
               ))}
             </select>
           </div>
-          <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+          <div className="hidden rounded-lg border border-slate-200 p-3 dark:border-slate-800">
             <div className="mb-2 text-sm font-bold text-slate-950 dark:text-white">Equivalente mais próximo do resultado</div>
             <div className="grid gap-2 sm:grid-cols-[90px_1fr]">
               <ColorSwatch hex={brandEquivalentResult.hex} label={brandEquivalentResult.name} />
@@ -2014,6 +1996,23 @@ function MixerSection(props: {
             </div>
           </div>
         </div>
+        <details className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+          <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-200">Ajustes avançados de marca</summary>
+          <div className="mt-3 grid gap-3 md:grid-cols-[auto_1fr]">
+            <IconButton icon={PaintBucket} label="Converter mistura manual para marca" onClick={convertMixerToBrand} />
+            <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+              <div className="mb-2 text-sm font-bold text-slate-950 dark:text-white">Equivalente mais próximo do resultado atual</div>
+              <div className="grid gap-2 sm:grid-cols-[90px_1fr]">
+                <ColorSwatch hex={brandEquivalentResult.hex} label={brandEquivalentResult.name} />
+                <div className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  <strong>{selectedBrand.name}</strong> / {brandEquivalentResult.line}
+                  <br />
+                  Tipo: {brandEquivalentResult.type}. Opacidade: {brandEquivalentResult.opacity}. Acabamento: {brandEquivalentResult.finish}.
+                </div>
+              </div>
+            </div>
+          </div>
+        </details>
       </section>
 
       <PhotoColorPickerSection
@@ -2024,8 +2023,9 @@ function MixerSection(props: {
       />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
-        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <details className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <summary className="cursor-pointer text-lg font-black text-slate-950 dark:text-white">Ajustes manuais de mistura</summary>
+          <div className="mt-4 mb-4 flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-lg font-black text-slate-950 dark:text-white">Cores da mistura</h3>
             <IconButton icon={Plus} label="Adicionar cor" onClick={addMixerColor} />
           </div>
@@ -2219,7 +2219,7 @@ function MixerSection(props: {
               <input type="color" value={customPrimer} onChange={(event) => setCustomPrimer(event.target.value)} className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-700 dark:bg-slate-950" />
             </div>
           ) : null}
-        </section>
+        </details>
 
         <section ref={exportRef} id="recipe-export-card" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
