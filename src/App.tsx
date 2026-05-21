@@ -2022,8 +2022,8 @@ function MixerSection(props: {
         applyPhotoMixSuggestion={applyPhotoMixSuggestion}
       />
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
-        <details className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="grid gap-4">
+        <details className="hidden">
           <summary className="cursor-pointer text-lg font-black text-slate-950 dark:text-white">Ajustes manuais de mistura</summary>
           <div className="mt-4 mb-4 flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-lg font-black text-slate-950 dark:text-white">Cores da mistura</h3>
@@ -2223,8 +2223,13 @@ function MixerSection(props: {
 
         <section ref={exportRef} id="recipe-export-card" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-lg font-black text-slate-950 dark:text-white">Resultado visual</h3>
-            <div className="flex flex-wrap gap-2">
+            <div>
+              <h3 className="text-lg font-black text-slate-950 dark:text-white">Resultado final</h3>
+              <p className="text-sm text-slate-600 dark:text-slate-300">Cor atual pronta para copiar, salvar ou ajustar rapidamente.</p>
+            </div>
+            <details className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-800">
+              <summary className="cursor-pointer text-xs font-black uppercase text-slate-600 dark:text-slate-300">Modo avançado</summary>
+              <div className="mt-2 flex flex-wrap gap-2">
               {(["visual", "perceptual", "subtractive"] as MixMode[]).map((mode) => (
                 <button
                   key={mode}
@@ -2238,15 +2243,13 @@ function MixerSection(props: {
                   {mode === "visual" ? "RGB linear" : mode === "perceptual" ? "OKLab" : "Subtrativa"}
                 </button>
               ))}
-            </div>
+              </div>
+            </details>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <ColorSwatch hex={colorA} label="Cor A" large />
-            <ColorSwatch hex={colorB} label="Cor B" large />
-            <ColorSwatch hex={predictedHex} label="Previsto" large />
+          <div className="grid gap-3 md:grid-cols-[1fr_1fr]">
             <div>
-              <ColorSwatch hex={calibratedHex} label="Calibrado" large />
+              <ColorSwatch hex={calibratedHex} label="Resultado" large />
               <input
                 type="color"
                 value={calibratedHex}
@@ -2255,13 +2258,19 @@ function MixerSection(props: {
                 title="Ajuste manual do resultado calibrado"
               />
             </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <ColorSwatch hex={predictedHex} label="Previsto" />
+              <ColorSwatch hex={brandEquivalentResult.hex} label={brandEquivalentResult.name} />
+            </div>
           </div>
 
           <div className="mt-3">
             <ColorCodePanel hex={calibratedHex} label="Códigos e contraste do resultado calibrado" />
           </div>
 
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <details className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+            <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-200">Variações e primer</summary>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
               <div className="mb-2 flex items-center gap-2 text-sm font-bold">
                 <Layers className="h-4 w-4 text-teal-500" />
@@ -2291,7 +2300,7 @@ function MixerSection(props: {
                 ))}
               </div>
             </div>
-          </div>
+            </div>
 
           <div className="mt-3">
             <div className="mb-2 text-sm font-bold text-slate-700 dark:text-slate-200">Variação por base</div>
@@ -2301,6 +2310,7 @@ function MixerSection(props: {
               ))}
             </div>
           </div>
+          </details>
 
           {quickPreview ? (
             <div className="mt-3 rounded-lg border border-teal-300 bg-teal-50 p-3 dark:border-teal-500/30 dark:bg-teal-500/10">
