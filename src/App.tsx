@@ -61,7 +61,7 @@ import {
   rgbToHsl,
   type MixMode,
 } from "./lib/color";
-import type { Calibration, ColorEntry, MixerColor, PaintDatabase, Palette as PaletteData, Recipe, SavedRecipe } from "./types";
+import type { BrandPaint, Calibration, ColorEntry, MixerColor, PaintDatabase, Palette as PaletteData, Recipe, SavedRecipe } from "./types";
 
 type SectionId =
   | "home"
@@ -113,6 +113,13 @@ type ShareRecipePayload = {
   finish: string;
   resultHex: string;
   calibratedHex?: string;
+};
+
+type BrandMixSuggestion = {
+  targetHex: string;
+  resultHex: string;
+  score: number;
+  parts: Array<{ paint: BrandPaint; parts: number }>;
 };
 
 const seedDatabase = rawDatabase as unknown as PaintDatabase;
@@ -397,6 +404,64 @@ const closestBrandPaint = (brandId: string, targetHex: string, line?: string) =>
 const brandLineOptions = (brandId: string) => {
   const brand = paintBrands.find((entry) => entry.id === brandId) ?? paintBrands[0];
   return ["todas", ...brand.lines];
+};
+
+const paintPartToMixerColor = (paint: BrandPaint, parts: number, brand?: (typeof paintBrands)[number]): MixerColor => ({
+  id: `${paint.id}-${parts}`,
+  brandId: brand?.id,
+  brandName: brand?.name,
+  paintId: paint.id,
+  line: paint.line,
+  name: paint.name,
+  hex: paint.hex,
+  parts,
+  paintType: paint.type,
+  opacity: paint.opacity,
+  finish: paint.finish,
+});
+
+const mixBrandParts = (parts: Array<{ paint: BrandPaint; parts: number }>, brand?: (typeof paintBrands)[number]) =>
+  mixColors(parts.map((part) => paintPartToMixerColor(part.paint, part.parts, brand)), "perceptual");
+
+const suggestBrandMix = (paints: BrandPaint[], targetHex: string, brand?: (typeof paintBrands)[number]): BrandMixSuggestion | null => {
+  if (!paints.length) return null;
+  const candidates = paints.slice(0, 48);
+  const ratios = [
+    [1, 1],
+    [2, 1],
+    [3, 1],
+    [4, 1],
+    [1, 2],
+    [1, 3],
+    [1, 4],
+  ];
+  const pushCandidate = (parts: Array<{ paint: BrandPaint; parts: number }>, currentBest: BrandMixSuggestion | null) => {
+    const resultHex = mixBrandParts(parts, brand);
+    const score = colorDistance(resultHex, targetHex);
+    if (!currentBest || score < currentBest.score) return { targetHex, resultHex, score, parts };
+    return currentBest;
+  };
+
+  let best: BrandMixSuggestion | null = null;
+  candidates.forEach((paint) => {
+    best = pushCandidate([{ paint, parts: 1 }], best);
+  });
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    for (let other = index + 1; other < candidates.length; other += 1) {
+      ratios.forEach(([first, second]) => {
+        best = pushCandidate(
+          [
+            { paint: candidates[index], parts: first },
+            { paint: candidates[other], parts: second },
+          ],
+          best,
+        );
+      });
+    }
+  }
+
+  return best;
 };
 
 const paletteFromBase = (type: string, baseHex: string): PaletteData => {
@@ -905,6 +970,17 @@ function App() {
     setQuickPreview({ label: `Mistura convertida para ${selectedBrand.name}`, hex: brandEquivalentResult.hex });
   };
 
+  const applyPhotoMixSuggestion = (suggestion: BrandMixSuggestion) => {
+    setMixerColors(
+      suggestion.parts.map((part) => ({
+        ...paintPartToMixerColor(part.paint, part.parts, selectedBrand),
+        id: crypto.randomUUID(),
+      })),
+    );
+    setManualCalibratedHex(suggestion.targetHex);
+    setQuickPreview({ label: "Cor da foto aplicada ao misturador", hex: suggestion.targetHex });
+  };
+
   const toggleFavorite = (kind: keyof FavoriteState, id: string) => {
     setFavorites((current) => {
       const list = current[kind];
@@ -1166,6 +1242,7 @@ function App() {
             setSelectedBrandLine={setSelectedBrandLine}
             updateMixerColorFromBrandPaint={updateMixerColorFromBrandPaint}
             convertMixerToBrand={convertMixerToBrand}
+            applyPhotoMixSuggestion={applyPhotoMixSuggestion}
             brandEquivalentResult={brandEquivalentResult}
             brandEquivalentColors={brandEquivalentColors}
             mixerColors={mixerColors}
@@ -1615,6 +1692,161 @@ function EssentialGuide({ database }: { database: PaintDatabase }) {
   );
 }
 
+function PhotoColorPickerSection({
+  selectedBrand,
+  selectedBrandPaints,
+  selectedBrandLine,
+  applyPhotoMixSuggestion,
+}: {
+  selectedBrand: (typeof paintBrands)[number];
+  selectedBrandPaints: BrandPaint[];
+  selectedBrandLine: string;
+  applyPhotoMixSuggestion: (suggestion: BrandMixSuggestion) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [photoName, setPhotoName] = useState("");
+  const [photoUrl, setPhotoUrl] = useState("");
+  const [photoTargetHex, setPhotoTargetHex] = useState("");
+  const [photoSuggestion, setPhotoSuggestion] = useState<BrandMixSuggestion | null>(null);
+
+  useEffect(() => {
+    if (!photoTargetHex) return;
+    setPhotoSuggestion(suggestBrandMix(selectedBrandPaints, photoTargetHex, selectedBrand));
+  }, [photoTargetHex, selectedBrand, selectedBrandPaints]);
+
+  const drawPhoto = (dataUrl: string) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return;
+    const image = new Image();
+    image.onload = () => {
+      const maxWidth = 920;
+      const scale = Math.min(1, maxWidth / image.width);
+      canvas.width = Math.max(1, Math.round(image.width * scale));
+      canvas.height = Math.max(1, Math.round(image.height * scale));
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    };
+    image.src = dataUrl;
+  };
+
+  useEffect(() => {
+    if (photoUrl) drawPhoto(photoUrl);
+  }, [photoUrl]);
+
+  const handlePhotoFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result ?? "");
+      setPhotoName(file.name);
+      setPhotoUrl(dataUrl);
+      setPhotoTargetHex("");
+      setPhotoSuggestion(null);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handlePickColor = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d", { willReadFrequently: true });
+    if (!canvas || !context) return;
+    const bounds = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(canvas.width - 1, Math.floor(((event.clientX - bounds.left) / bounds.width) * canvas.width)));
+    const y = Math.max(0, Math.min(canvas.height - 1, Math.floor(((event.clientY - bounds.top) / bounds.height) * canvas.height)));
+    const [r, g, b] = context.getImageData(x, y, 1, 1).data;
+    setPhotoTargetHex(rgbToHex({ r, g, b }));
+  };
+
+  const copyPhotoRecipe = async () => {
+    if (!photoSuggestion) return;
+    const parts = photoSuggestion.parts.map((part) => `${part.parts} parte${part.parts > 1 ? "s" : ""} ${part.paint.name} (${part.paint.line})`).join(" + ");
+    await copyToClipboard(`${selectedBrand.name}: ${parts}. Alvo ${photoSuggestion.targetHex}, previsão ${photoSuggestion.resultHex}.`);
+  };
+
+  const accuracy = photoSuggestion ? Math.max(0, Math.round((1 - Math.min(photoSuggestion.score, 1)) * 100)) : 0;
+
+  return (
+    <section className="mb-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="flex items-center gap-2 text-lg font-black text-slate-950 dark:text-white">
+            <Pipette className="h-5 w-5 text-teal-500" />
+            Pegar cor de foto
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+            Envie uma imagem, clique/toque na cor desejada e gere uma receita aproximada usando {selectedBrand.name}
+            {selectedBrandLine !== "todas" ? ` / ${selectedBrandLine}` : ""}.
+          </p>
+        </div>
+        <label className="inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold transition hover:border-teal-400 dark:border-slate-700 dark:bg-slate-900">
+          <ImageIcon className="h-4 w-4" />
+          Escolher foto
+          <input type="file" accept="image/*" onChange={handlePhotoFile} className="sr-only" />
+        </label>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
+          {photoUrl ? (
+            <canvas ref={canvasRef} onClick={handlePickColor} className="block max-h-[460px] w-full cursor-crosshair object-contain" title="Clique na cor que deseja copiar" />
+          ) : (
+            <div className="flex min-h-64 flex-col items-center justify-center p-6 text-center text-slate-500 dark:text-slate-400">
+              <ImageIcon className="mb-3 h-10 w-10" />
+              <div className="text-sm font-bold">Carregue uma foto da referência, miniatura ou arte.</div>
+              <div className="mt-1 text-xs">Depois clique na área da imagem para pegar a cor.</div>
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-3">
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm leading-6 text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+            Foto não mede tinta real com precisão absoluta. Luz, câmera, monitor, primer, pigmento e camada mudam o resultado. Use como ponto de partida e faça teste em descarte.
+          </div>
+          {photoName ? <div className="text-xs font-bold text-slate-500 dark:text-slate-400">Arquivo: {photoName}</div> : null}
+
+          {photoTargetHex ? (
+            <div className="grid gap-3">
+              <ColorSwatch hex={photoTargetHex} label="Cor escolhida na foto" large />
+              {photoSuggestion ? (
+                <>
+                  <ColorSwatch hex={photoSuggestion.resultHex} label={`Previsão ${selectedBrand.name}`} large />
+                  <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div className="text-sm font-black text-slate-950 dark:text-white">Mistura sugerida</div>
+                      <span className="rounded-md bg-teal-100 px-2 py-1 text-xs font-black text-teal-900 dark:bg-teal-500/20 dark:text-teal-100">{accuracy}% similar</span>
+                    </div>
+                    <div className="space-y-2">
+                      {photoSuggestion.parts.map((part) => (
+                        <div key={`${part.paint.id}-${part.parts}`} className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                          <span className="h-7 w-7 rounded-md border border-white/20" style={{ background: part.paint.hex }} />
+                          <span>
+                            <strong>{part.parts} parte{part.parts > 1 ? "s" : ""}</strong> {part.paint.name} / {part.paint.line}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <IconButton icon={FlaskConical} label="Aplicar no misturador" onClick={() => applyPhotoMixSuggestion(photoSuggestion)} />
+                    <IconButton icon={Copy} label="Copiar receita" onClick={copyPhotoRecipe} />
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-slate-200 p-3 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
+              A receita aparece aqui depois que você selecionar uma cor na foto.
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function MixerSection(props: {
   database: PaintDatabase;
   selectedBrandId: string;
@@ -1625,6 +1857,7 @@ function MixerSection(props: {
   setSelectedBrandLine: (line: string) => void;
   updateMixerColorFromBrandPaint: (id: string, brandId: string, paintId: string) => void;
   convertMixerToBrand: () => void;
+  applyPhotoMixSuggestion: (suggestion: BrandMixSuggestion) => void;
   brandEquivalentResult: (typeof paintBrands)[number]["paints"][number];
   brandEquivalentColors: Array<{ color: MixerColor; paint: (typeof paintBrands)[number]["paints"][number] }>;
   mixerColors: MixerColor[];
@@ -1673,6 +1906,7 @@ function MixerSection(props: {
     setSelectedBrandLine,
     updateMixerColorFromBrandPaint,
     convertMixerToBrand,
+    applyPhotoMixSuggestion,
     brandEquivalentResult,
     brandEquivalentColors,
     mixerColors,
@@ -1781,6 +2015,13 @@ function MixerSection(props: {
           </div>
         </div>
       </section>
+
+      <PhotoColorPickerSection
+        selectedBrand={selectedBrand}
+        selectedBrandPaints={selectedBrandPaints}
+        selectedBrandLine={selectedBrandLine}
+        applyPhotoMixSuggestion={applyPhotoMixSuggestion}
+      />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
         <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
