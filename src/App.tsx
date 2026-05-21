@@ -1556,12 +1556,6 @@ function HomeSection({
             {savedRecipes.length} receitas salvas. Projeto atual: {completedTasks}/{project.tasks.length} etapas concluídas.
           </p>
         </DataCard>
-        <DataCard className="lg:col-span-2">
-          <h3 className="text-lg font-black">Modo plug and play</h3>
-          <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-            As ferramentas avançadas continuam existindo, mas agora ficam escondidas. Comece pela foto ou por uma receita pronta e ajuste só se precisar.
-          </p>
-        </DataCard>
       </div>
     </div>
   );
