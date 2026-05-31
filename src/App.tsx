@@ -155,6 +155,8 @@ const primarySections: Array<{ id: SectionId; label: string; icon: LucideIcon }>
   { id: "settings", label: "Mais", icon: Settings },
 ];
 
+const sortedPaintBrands = [...paintBrands].sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+
 const primerOptions = [
   { id: "preto", label: "Preto", hex: "#050505" },
   { id: "branco", label: "Branco", hex: "#f8fafc" },
@@ -399,7 +401,7 @@ const closestBrandPaint = (brandId: string, targetHex: string, line?: string) =>
 
 const brandLineOptions = (brandId: string) => {
   const brand = paintBrands.find((entry) => entry.id === brandId) ?? paintBrands[0];
-  return ["todas", ...brand.lines];
+  return ["todas", ...brand.lines.slice().sort((a, b) => a.localeCompare(b, "pt-BR"))];
 };
 
 const paintPartToMixerColor = (paint: BrandPaint, parts: number, brand?: (typeof paintBrands)[number]): MixerColor => ({
@@ -672,7 +674,7 @@ function App() {
   const [customPrimer, setCustomPrimer] = useState("#64748b");
   const [mixerOpacity, setMixerOpacity] = useState("semi-opaco");
   const [mixerFinish, setMixerFinish] = useState("fosco");
-  const [selectedBrandId, setSelectedBrandId] = useState("vallejo");
+  const [selectedBrandId, setSelectedBrandId] = useState("acrilex");
   const [selectedBrandLine, setSelectedBrandLine] = useState("todas");
   const [recipeSearch, setRecipeSearch] = useState("");
   const [techniqueSearch, setTechniqueSearch] = useState("");
@@ -701,8 +703,10 @@ function App() {
   const calibratedHex = normalizeHex(matchedCalibration?.estimatedHex ?? manualCalibratedHex);
   const variations = useMemo(() => getVariations(predictedHex), [predictedHex]);
   const generatedPalette = useMemo(() => paletteFromBase(paletteType, paletteBase), [paletteType, paletteBase]);
-  const selectedBrand = paintBrands.find((brand) => brand.id === selectedBrandId) ?? paintBrands[0];
-  const selectedBrandPaints = selectedBrand.paints.filter((paint) => selectedBrandLine === "todas" || paint.line === selectedBrandLine);
+  const selectedBrand = paintBrands.find((brand) => brand.id === selectedBrandId) ?? sortedPaintBrands[0] ?? paintBrands[0];
+  const selectedBrandPaints = selectedBrand.paints
+    .filter((paint) => selectedBrandLine === "todas" || paint.line === selectedBrandLine)
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   const brandEquivalentResult = closestBrandPaint(selectedBrandId, calibratedHex, selectedBrandLine);
   const brandEquivalentColors = useMemo(
     () =>
@@ -1960,7 +1964,7 @@ function MixerSection(props: {
               }}
               className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
             >
-              {paintBrands.map((brand) => (
+              {sortedPaintBrands.map((brand) => (
                 <option key={brand.id} value={brand.id}>
                   {brand.name}
                 </option>
@@ -2172,7 +2176,7 @@ function MixerSection(props: {
             <div className="space-y-2">
               <FieldLabel>Marca alvo da receita</FieldLabel>
               <select value={selectedBrandId} onChange={(event) => setSelectedBrandId(event.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
-                {paintBrands.map((brand) => (
+                {sortedPaintBrands.map((brand) => (
                   <option key={brand.id} value={brand.id}>
                     {brand.name}
                   </option>
