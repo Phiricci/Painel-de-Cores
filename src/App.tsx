@@ -149,7 +149,6 @@ const sections: Array<{ id: SectionId; label: string; icon: LucideIcon }> = [
 ];
 
 const primarySections: Array<{ id: SectionId; label: string; icon: LucideIcon }> = [
-  { id: "home", label: "Início", icon: Home },
   { id: "mixer", label: "Criar cor", icon: Pipette },
   { id: "recipes", label: "Receitas", icon: BookOpen },
   { id: "mine", label: "Salvos", icon: Save },
@@ -667,7 +666,7 @@ function App() {
   const [theme, setTheme] = useLocalStorage<"dark" | "light">(storageKeys.theme, "dark");
   const [favorites, setFavorites] = useLocalStorage<FavoriteState>(storageKeys.favorites, emptyFavorites);
   const [project, setProject] = useLocalStorage<ProjectState>(storageKeys.project, defaultProject);
-  const [section, setSection] = useState<SectionId>("home");
+  const [section, setSection] = useState<SectionId>("mixer");
   const [mixMode, setMixMode] = useState<MixMode>("perceptual");
   const [primerId, setPrimerId] = useState("cinza");
   const [customPrimer, setCustomPrimer] = useState("#64748b");
@@ -1406,7 +1405,7 @@ function App() {
               );
             })}
           </nav>
-          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/70">
+          <div className="hidden">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
@@ -1440,7 +1439,7 @@ function App() {
               <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Nada encontrado.</p>
             ) : null}
           </div>
-          <div className="mt-5 hidden rounded-lg border border-amber-300/50 bg-amber-100 p-3 text-xs leading-5 text-amber-950 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100 lg:block">
+          <div className="hidden">
             <div className="mb-1 flex items-center gap-2 font-bold">
               <AlertTriangle className="h-4 w-4" />
               Mistura real é aproximada
@@ -2323,16 +2322,15 @@ function MixerSection(props: {
 
       <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="mb-3 flex items-center gap-2">
-          <SlidersHorizontal className="h-5 w-5 text-teal-500" />
-          <h3 className="text-lg font-black">Atalhos principais</h3>
+          <Save className="h-5 w-5 text-teal-500" />
+          <h3 className="text-lg font-black">Salvar e compartilhar</h3>
         </div>
         <div className="mb-3 flex flex-wrap gap-2">
           <IconButton icon={Save} label="Salvar" onClick={saveRecipe} />
-          <IconButton icon={ClipboardList} label="Projeto" onClick={addCurrentMixToProject} />
-          <IconButton icon={Palette} label="Paleta" onClick={() => { setPaletteBase(predictedHex); setSection("palettes"); }} />
           <IconButton icon={Link} label="Compartilhar" onClick={shareCurrentRecipe} />
+          <IconButton icon={ImageIcon} label="Exportar PNG" onClick={exportCurrentPng} />
         </div>
-        <details className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+        <details className="hidden">
           <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-200">Mais ações</summary>
           <div className="mt-3 flex flex-wrap gap-2">
           <IconButton icon={Save} label="Salvar receita" onClick={saveRecipe} />
@@ -2367,7 +2365,7 @@ function MixerSection(props: {
         </details>
       </section>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+      <div className="hidden">
         <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <h3 className="mb-3 text-lg font-black">Histórico das últimas misturas</h3>
           <div className="grid gap-2 sm:grid-cols-2">
