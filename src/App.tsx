@@ -404,6 +404,69 @@ const brandLineOptions = (brandId: string) => {
   return ["todas", ...brand.lines.slice().sort((a, b) => a.localeCompare(b, "pt-BR"))];
 };
 
+const formatParts = (parts: number) => Number(parts.toFixed(2)).toLocaleString("pt-BR");
+
+const isValidHexInput = (value: string) => /^#?[0-9a-fA-F]{3}$|^#?[0-9a-fA-F]{6}$/.test(value.trim());
+
+const primerAdviceForColor = (hex: string, paints: Array<Pick<BrandPaint, "family" | "name" | "type">> = []) => {
+  const hsl = rgbToHsl(hexToRgb(hex));
+  const families = paints.map((paint) => normalizeText(`${paint.family} ${paint.name} ${paint.type}`)).join(" ");
+
+  if (families.includes("metal") || families.includes("candy")) {
+    return {
+      base: "Preto brilhante ou cinza escuro liso",
+      why: "Dá mais profundidade para metálicos, candy e cores transparentes.",
+    };
+  }
+
+  if (hsl.l < 24) {
+    return {
+      base: "Preto com luz zenital cinza/branca",
+      why: "Mantém sombras fortes sem perder leitura dos volumes.",
+    };
+  }
+
+  if (hsl.h >= 42 && hsl.h <= 72 && hsl.s > 35) {
+    return {
+      base: "Rosa claro, bege ou marfim",
+      why: "Ajuda amarelos a cobrir melhor e evita aparência esverdeada.",
+    };
+  }
+
+  if ((hsl.h <= 18 || hsl.h >= 340) && hsl.s > 35) {
+    return {
+      base: "Rosa claro ou vermelho escuro",
+      why: "Rosa deixa vermelho vivo; vermelho escuro deixa o resultado mais profundo.",
+    };
+  }
+
+  if (families.includes("pele")) {
+    return {
+      base: "Rosa claro, bege quente ou marrom avermelhado",
+      why: "Cria naturalidade e reduz a quantidade de camadas em tons de pele.",
+    };
+  }
+
+  if (families.includes("marrom") || families.includes("couro") || families.includes("madeira")) {
+    return {
+      base: "Marrom médio, bege ou vermelho óxido",
+      why: "Ajuda couro, madeira e sujeira a ficarem mais naturais.",
+    };
+  }
+
+  if (hsl.s > 72 && hsl.l > 50) {
+    return {
+      base: "Branco ou off-white",
+      why: "Preserva vivacidade em neon, magia, energia e cores muito saturadas.",
+    };
+  }
+
+  return {
+    base: "Cinza claro",
+    why: "É a base mais segura para manter a cor fiel e controlar sombras.",
+  };
+};
+
 const paintPartToMixerColor = (paint: BrandPaint, parts: number, brand?: (typeof paintBrands)[number]): MixerColor => ({
   id: `${paint.id}-${parts}`,
   brandId: brand?.id,
@@ -558,6 +621,51 @@ function ColorSwatch({ hex, label, large = false }: { hex: string; label?: strin
       <div className="min-w-0">
         {label ? <div className="truncate text-xs font-bold">{label}</div> : null}
         <div className="font-mono text-xs font-semibold uppercase">{hex}</div>
+      </div>
+    </div>
+  );
+}
+
+function MixerPartsSummary({ colors, resultHex }: { colors: MixerColor[]; resultHex: string }) {
+  const activeColors = colors.filter((color) => color.parts > 0);
+  const primerAdvice = primerAdviceForColor(
+    resultHex,
+    activeColors.map((color) => ({ family: color.name, name: color.name, type: color.paintType })),
+  );
+
+  if (!activeColors.length) return null;
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-xs font-black uppercase tracking-wide text-teal-700 dark:text-teal-300">Receita atual</div>
+          <h4 className="text-base font-black text-slate-950 dark:text-white">Tintas e proporções</h4>
+        </div>
+        <span className="rounded-md bg-slate-200 px-2 py-1 text-xs font-black text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+          {activeColors.length} cor{activeColors.length > 1 ? "es" : ""}
+        </span>
+      </div>
+      <div className="space-y-2">
+        {activeColors.map((color) => (
+          <div key={color.id} className="grid grid-cols-[42px_1fr_auto] items-center gap-3 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900">
+            <span className="h-10 w-10 rounded-md border border-white/20 shadow-inner" style={{ background: color.hex }} />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-black text-slate-950 dark:text-white">{color.name}</span>
+              <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                {color.brandName ? `${color.brandName} / ${color.line ?? "linha"}` : color.paintType}
+              </span>
+            </span>
+            <span className="rounded-md bg-teal-100 px-2 py-1 text-sm font-black text-teal-950 dark:bg-teal-500/20 dark:text-teal-100">
+              {formatParts(color.parts)}x
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm leading-6 text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+        <strong>Base sugerida:</strong> {primerAdvice.base}
+        <br />
+        {primerAdvice.why}
       </div>
     </div>
   );
@@ -1388,7 +1496,7 @@ function App() {
               {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </button>
           </div>
-          <nav className="flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible">
+          <nav className="grid grid-cols-4 gap-2 lg:block lg:space-y-1">
             {primarySections.map((item) => {
               const Icon = item.icon;
               return (
@@ -1397,7 +1505,7 @@ function App() {
                   type="button"
                   onClick={() => setSection(item.id)}
                   className={cx(
-                    "flex min-h-11 shrink-0 items-center gap-3 rounded-lg px-3 text-left text-sm font-semibold transition lg:w-full",
+                    "flex min-h-11 min-w-0 items-center justify-center gap-1 rounded-lg px-1 text-center text-[11px] font-semibold transition lg:w-full lg:justify-start lg:gap-3 lg:px-3 lg:text-left lg:text-sm",
                     section === item.id
                       ? "bg-teal-500 text-slate-950 shadow-glow"
                       : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white",
@@ -1686,12 +1794,19 @@ function PhotoColorPickerSection({
   const [photoName, setPhotoName] = useState("");
   const [photoUrl, setPhotoUrl] = useState("");
   const [photoTargetHex, setPhotoTargetHex] = useState("");
+  const [manualHexInput, setManualHexInput] = useState("#d71920");
   const [photoSuggestion, setPhotoSuggestion] = useState<BrandMixSuggestion | null>(null);
 
   useEffect(() => {
     if (!photoTargetHex) return;
     setPhotoSuggestion(suggestBrandMix(selectedBrandPaints, photoTargetHex, selectedBrand));
   }, [photoTargetHex, selectedBrand, selectedBrandPaints]);
+
+  const setTargetHex = (hex: string) => {
+    const normalized = normalizeHex(hex);
+    setPhotoTargetHex(normalized);
+    setManualHexInput(normalized);
+  };
 
   const drawPhoto = (dataUrl: string) => {
     const canvas = canvasRef.current;
@@ -1723,6 +1838,7 @@ function PhotoColorPickerSection({
       setPhotoName(file.name);
       setPhotoUrl(dataUrl);
       setPhotoTargetHex("");
+      setManualHexInput("#d71920");
       setPhotoSuggestion(null);
     };
     reader.readAsDataURL(file);
@@ -1736,16 +1852,18 @@ function PhotoColorPickerSection({
     const x = Math.max(0, Math.min(canvas.width - 1, Math.floor(((event.clientX - bounds.left) / bounds.width) * canvas.width)));
     const y = Math.max(0, Math.min(canvas.height - 1, Math.floor(((event.clientY - bounds.top) / bounds.height) * canvas.height)));
     const [r, g, b] = context.getImageData(x, y, 1, 1).data;
-    setPhotoTargetHex(rgbToHex({ r, g, b }));
+    setTargetHex(rgbToHex({ r, g, b }));
   };
 
   const copyPhotoRecipe = async () => {
     if (!photoSuggestion) return;
-    const parts = photoSuggestion.parts.map((part) => `${part.parts} parte${part.parts > 1 ? "s" : ""} ${part.paint.name} (${part.paint.line})`).join(" + ");
-    await copyToClipboard(`${selectedBrand.name}: ${parts}. Alvo ${photoSuggestion.targetHex}, previsão ${photoSuggestion.resultHex}.`);
+    const primerAdvice = primerAdviceForColor(photoSuggestion.targetHex, photoSuggestion.parts.map((part) => part.paint));
+    const parts = photoSuggestion.parts.map((part) => `${formatParts(part.parts)} parte${part.parts > 1 ? "s" : ""} ${part.paint.name} (${part.paint.line})`).join(" + ");
+    await copyToClipboard(`${selectedBrand.name}: ${parts}. Base: ${primerAdvice.base}. Alvo ${photoSuggestion.targetHex}, previsão ${photoSuggestion.resultHex}.`);
   };
 
   const accuracy = photoSuggestion ? Math.max(0, Math.round((1 - Math.min(photoSuggestion.score, 1)) * 100)) : 0;
+  const photoPrimerAdvice = photoSuggestion ? primerAdviceForColor(photoSuggestion.targetHex, photoSuggestion.parts.map((part) => part.paint)) : null;
 
   return (
     <section className="mb-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -1753,10 +1871,10 @@ function PhotoColorPickerSection({
         <div>
           <h3 className="flex items-center gap-2 text-lg font-black text-slate-950 dark:text-white">
             <Pipette className="h-5 w-5 text-teal-500" />
-            2. Pegue a cor da foto
+            2. Escolha a cor final
           </h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-            Envie uma imagem, clique/toque na cor desejada e gere uma receita aproximada usando {selectedBrand.name}
+            Use o seletor, digite o HEX ou envie uma foto e clique/toque na cor. A receita usa {selectedBrand.name}
             {selectedBrandLine !== "todas" ? ` / ${selectedBrandLine}` : ""}.
           </p>
         </div>
@@ -1767,57 +1885,101 @@ function PhotoColorPickerSection({
         </label>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
-          {photoUrl ? (
-            <canvas ref={canvasRef} onClick={handlePickColor} className="block max-h-[460px] w-full cursor-crosshair object-contain" title="Clique na cor que deseja copiar" />
-          ) : (
-            <div className="flex min-h-64 flex-col items-center justify-center p-6 text-center text-slate-500 dark:text-slate-400">
-              <ImageIcon className="mb-3 h-10 w-10" />
-              <div className="text-sm font-bold">Carregue uma foto da referência, miniatura ou arte.</div>
-              <div className="mt-1 text-xs">Depois clique na área da imagem para pegar a cor.</div>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="space-y-3">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
+            <div className="grid gap-3 sm:grid-cols-[80px_1fr]">
+              <input
+                type="color"
+                value={photoTargetHex || manualHexInput}
+                onChange={(event) => setTargetHex(event.target.value)}
+                className="h-16 w-full rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-700 dark:bg-slate-900"
+                title="Escolha a cor final desejada"
+              />
+              <div>
+                <FieldLabel>Cor final desejada</FieldLabel>
+                <input
+                  value={manualHexInput}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setManualHexInput(value);
+                    if (isValidHexInput(value)) setTargetHex(value);
+                  }}
+                  placeholder="#d71920"
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm uppercase dark:border-slate-700 dark:bg-slate-900"
+                />
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Digite um HEX ou clique na imagem abaixo.</p>
+              </div>
             </div>
-          )}
+          </div>
+
+          <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
+            {photoUrl ? (
+              <canvas ref={canvasRef} onClick={handlePickColor} className="block max-h-[420px] w-full cursor-crosshair object-contain" title="Clique na cor que deseja copiar" />
+            ) : (
+              <div className="flex min-h-52 flex-col items-center justify-center p-6 text-center text-slate-500 dark:text-slate-400">
+                <ImageIcon className="mb-3 h-10 w-10" />
+                <div className="text-sm font-bold">Foto opcional.</div>
+                <div className="mt-1 text-xs">Se carregar uma imagem, clique na área da cor que deseja copiar.</div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="space-y-3">
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm leading-6 text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-            Foto não mede tinta real com precisão absoluta. Luz, câmera, monitor, primer, pigmento e camada mudam o resultado. Use como ponto de partida e faça teste em descarte.
-          </div>
           {photoName ? <div className="text-xs font-bold text-slate-500 dark:text-slate-400">Arquivo: {photoName}</div> : null}
 
           {photoTargetHex ? (
             <div className="grid gap-3">
-              <ColorSwatch hex={photoTargetHex} label="Cor escolhida na foto" large />
               {photoSuggestion ? (
                 <>
-                  <ColorSwatch hex={photoSuggestion.resultHex} label={`Previsão ${selectedBrand.name}`} large />
-                  <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <div className="text-sm font-black text-slate-950 dark:text-white">Mistura sugerida</div>
-                      <span className="rounded-md bg-teal-100 px-2 py-1 text-xs font-black text-teal-900 dark:bg-teal-500/20 dark:text-teal-100">{accuracy}% similar</span>
+                  <div className="rounded-lg border border-teal-300 bg-teal-50 p-3 dark:border-teal-500/30 dark:bg-teal-500/10">
+                    <div className="mb-3 flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-wide text-teal-700 dark:text-teal-200">Receita rápida</div>
+                        <h4 className="mt-1 text-lg font-black text-slate-950 dark:text-white">Tintas para chegar nessa cor</h4>
+                      </div>
+                      <span className="rounded-md bg-white px-2 py-1 text-xs font-black text-teal-900 dark:bg-slate-950 dark:text-teal-100">{accuracy}% similar</span>
                     </div>
-                    <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <ColorSwatch hex={photoTargetHex} label="Cor alvo" />
+                      <ColorSwatch hex={photoSuggestion.resultHex} label="Previsão" />
+                    </div>
+                    <div className="mt-3 space-y-2">
                       {photoSuggestion.parts.map((part) => (
-                        <div key={`${part.paint.id}-${part.parts}`} className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                          <span className="h-7 w-7 rounded-md border border-white/20" style={{ background: part.paint.hex }} />
-                          <span>
-                            <strong>{part.parts} parte{part.parts > 1 ? "s" : ""}</strong> {part.paint.name} / {part.paint.line}
+                        <div key={`${part.paint.id}-${part.parts}`} className="grid grid-cols-[44px_1fr_auto] items-center gap-3 rounded-lg border border-white bg-white p-2 dark:border-slate-800 dark:bg-slate-950">
+                          <span className="h-10 w-10 rounded-md border border-white/20 shadow-inner" style={{ background: part.paint.hex }} />
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-black text-slate-950 dark:text-white">{part.paint.name}</span>
+                            <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{part.paint.line} · {part.paint.type}</span>
+                          </span>
+                          <span className="rounded-md bg-slate-100 px-2 py-1 text-sm font-black text-slate-950 dark:bg-slate-800 dark:text-white">
+                            {formatParts(part.parts)}x
                           </span>
                         </div>
                       ))}
                     </div>
+                    {photoPrimerAdvice ? (
+                      <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm leading-6 text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                        <strong>Base recomendada:</strong> {photoPrimerAdvice.base}
+                        <br />
+                        {photoPrimerAdvice.why}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <IconButton icon={FlaskConical} label="Aplicar no misturador" onClick={() => applyPhotoMixSuggestion(photoSuggestion)} />
-                    <IconButton icon={Copy} label="Copiar receita" onClick={copyPhotoRecipe} />
+                    <IconButton icon={FlaskConical} label="Usar esta receita" onClick={() => applyPhotoMixSuggestion(photoSuggestion)} />
+                    <IconButton icon={Copy} label="Copiar" onClick={copyPhotoRecipe} />
                   </div>
+                  <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                    Aproximação prática: teste em paleta ou peça de descarte antes de pintar a peça final.
+                  </p>
                 </>
               ) : null}
             </div>
           ) : (
             <div className="rounded-lg border border-slate-200 p-3 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
-              A receita aparece aqui depois que você selecionar uma cor na foto.
+              Escolha uma cor acima ou clique em uma foto para ver a receita.
             </div>
           )}
         </div>
@@ -2262,8 +2424,15 @@ function MixerSection(props: {
           </div>
 
           <div className="mt-3">
-            <ColorCodePanel hex={calibratedHex} label="Códigos e contraste do resultado calibrado" />
+            <MixerPartsSummary colors={mixerColors} resultHex={calibratedHex} />
           </div>
+
+          <details className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+            <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-200">Códigos HEX/RGB/HSL</summary>
+            <div className="mt-3">
+              <ColorCodePanel hex={calibratedHex} label="Códigos e contraste do resultado calibrado" />
+            </div>
+          </details>
 
           <details className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
             <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-200">Variações e primer</summary>
