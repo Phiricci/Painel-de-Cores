@@ -438,7 +438,12 @@ const closestBrandPaint = (brandId: string, targetHex: string, line?: string) =>
   const brand = paintBrands.find((entry) => entry.id === brandId) ?? paintBrands[0];
   const pool = line && line !== "todas" ? brand.paints.filter((paint) => paint.line === line) : brand.paints;
   const candidates = pool.length ? pool : brand.paints;
-  return [...candidates].sort((a, b) => colorDistance(a.hex, targetHex) - colorDistance(b.hex, targetHex))[0];
+  const targetHsl = rgbToHsl(hexToRgb(targetHex));
+  const isNeonTarget = targetHsl.s > 88 && targetHsl.l > 58;
+  const mixable = candidates.filter(isMixablePaint);
+  const ordinary = mixable.filter((paint) => !isEffectPaint(paint));
+  const practicalCandidates = isNeonTarget ? mixable : ordinary.length ? ordinary : mixable.length ? mixable : candidates;
+  return [...practicalCandidates].sort((a, b) => colorDistance(a.hex, targetHex) - colorDistance(b.hex, targetHex))[0];
 };
 
 const brandLineOptions = (brandId: string) => {
@@ -735,6 +740,36 @@ function ColorSwatch({ hex, label, large = false }: { hex: string; label?: strin
   );
 }
 
+function PaintRecipeRow({
+  part,
+  brand,
+  index,
+}: {
+  part: { paint: BrandPaint; parts: number };
+  brand: (typeof paintBrands)[number];
+  index: number;
+}) {
+  return (
+    <div className="grid grid-cols-[48px_1fr_auto] items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+      <span className="h-12 w-12 rounded-md border border-white/20 shadow-inner" style={{ background: part.paint.hex }} />
+      <span className="min-w-0">
+        <span className="block text-[10px] font-black uppercase tracking-wide text-teal-700 dark:text-teal-300">
+          Tinta {index + 1} - nome exato
+        </span>
+        <span className="block break-words text-base font-black text-slate-950 dark:text-white">
+          {brand.name} - {part.paint.name}
+        </span>
+        <span className="block break-words text-xs font-semibold text-slate-500 dark:text-slate-400">
+          {part.paint.line} · {part.paint.type} · {part.paint.hex.toUpperCase()}
+        </span>
+      </span>
+      <span className="rounded-md bg-teal-100 px-3 py-2 text-base font-black text-teal-950 dark:bg-teal-500/20 dark:text-teal-100">
+        {formatParts(part.parts)}x
+      </span>
+    </div>
+  );
+}
+
 function MixerPartsSummary({
   colors,
   resultHex,
@@ -767,7 +802,14 @@ function MixerPartsSummary({
           {suggestedParts.length || activeColors.length} tinta{(suggestedParts.length || activeColors.length) > 1 ? "s" : ""}
         </span>
       </div>
-      <div className="space-y-2">
+      {suggestedParts.length ? (
+        <div className="mb-3 space-y-2">
+          {suggestedParts.map((part, index) => (
+            <PaintRecipeRow key={`visible-${part.paint.id}-${part.parts}`} part={part} brand={selectedBrand} index={index} />
+          ))}
+        </div>
+      ) : null}
+      <div className={cx("space-y-2", suggestedParts.length ? "hidden" : "")}>
         {suggestedParts.length
           ? suggestedParts.map((part) => (
               <div key={`${part.paint.id}-${part.parts}`} className="grid grid-cols-[42px_1fr_auto] items-center gap-3 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900">
@@ -2101,6 +2143,11 @@ function PhotoColorPickerSection({
                       <ColorSwatch hex={photoSuggestion.resultHex} label="Previsão" />
                     </div>
                     <div className="mt-3 space-y-2">
+                      {photoSuggestion.parts.map((part, index) => (
+                        <PaintRecipeRow key={`photo-visible-${part.paint.id}-${part.parts}`} part={part} brand={selectedBrand} index={index} />
+                      ))}
+                    </div>
+                    <div className="hidden">
                       {photoSuggestion.parts.map((part) => (
                         <div key={`${part.paint.id}-${part.parts}`} className="grid grid-cols-[44px_1fr_auto] items-center gap-3 rounded-lg border border-white bg-white p-2 dark:border-slate-800 dark:bg-slate-950">
                           <span className="h-10 w-10 rounded-md border border-white/20 shadow-inner" style={{ background: part.paint.hex }} />
@@ -2606,6 +2653,16 @@ function MixerSection(props: {
             <div className="grid gap-3 sm:grid-cols-2">
               <ColorSwatch hex={predictedHex} label="Previsto" />
               <ColorSwatch hex={brandEquivalentResult.hex} label={brandEquivalentResult.name} />
+            </div>
+          </div>
+
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
+            <div className="text-xs font-black uppercase tracking-wide text-teal-700 dark:text-teal-300">Cor pronta mais próxima</div>
+            <div className="mt-1 text-base font-black text-slate-950 dark:text-white">
+              {selectedBrand.name} - {brandEquivalentResult.name}
+            </div>
+            <div className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">
+              {brandEquivalentResult.line} · {brandEquivalentResult.type} · {brandEquivalentResult.hex.toUpperCase()}
             </div>
           </div>
 
