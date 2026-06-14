@@ -397,6 +397,43 @@ const isMixablePaint = (paint: BrandPaint) => {
   return !["primer", "verniz", "varnish", "auxiliar", "medium", "fixador"].some((term) => text.includes(term));
 };
 
+const isEffectPaint = (paint: BrandPaint) => {
+  const text = normalizeText(`${paint.family} ${paint.name} ${paint.line} ${paint.type}`);
+  return ["fluor", "fluorescente", "neon", "metal", "metalica", "metallic", "wash", "shade", "contrast", "speedpaint", "xpress", "ink", "clear", "transparent", "candy", "weathering"].some((term) => text.includes(term));
+};
+
+const paintMatchesTerms = (paint: BrandPaint, terms: string[]) => {
+  const text = normalizeText(`${paint.family} ${paint.name} ${paint.line} ${paint.type}`);
+  return terms.some((term) => text.includes(term));
+};
+
+const practicalPaintPool = (paints: BrandPaint[], targetHex: string, sourceColors: MixerColor[] = []) => {
+  const sourceText = sourceColors.map((color) => `${color.name} ${color.paintType} ${color.brandName ?? ""}`).join(" ");
+  const intent = targetIntent(targetHex, sourceText);
+  const mixable = paints.filter(isMixablePaint);
+  const normalPaints = mixable.filter((paint) => !isEffectPaint(paint));
+  const poolBase = normalPaints.length ? normalPaints : mixable;
+
+  const termMap: Record<string, string[]> = {
+    skin: ["pele", "flesh", "skin", "rosa", "pink", "magenta", "vermelho", "red", "marrom", "brown", "ocre", "ochre", "amarelo", "yellow", "branco", "white", "marfim", "ivory", "bege", "siena", "sienna", "sepia", "violeta", "roxo", "purple"],
+    yellow: ["amarelo", "yellow", "ocre", "ochre", "laranja", "orange", "branco", "white", "marfim", "ivory", "rosa", "pink", "magenta"],
+    red: ["vermelho", "red", "magenta", "rosa", "pink", "laranja", "orange", "marrom", "brown", "branco", "white", "violeta", "roxo", "purple"],
+    orange: ["laranja", "orange", "vermelho", "red", "amarelo", "yellow", "ocre", "ochre", "marrom", "brown", "branco", "white", "pele"],
+    green: ["verde", "green", "amarelo", "yellow", "azul", "blue", "ocre", "ochre", "marrom", "brown", "branco", "white", "preto", "black"],
+    blue: ["azul", "blue", "ciano", "cyan", "turquesa", "preto", "black", "branco", "white", "violeta", "roxo", "purple"],
+    purple: ["violeta", "roxo", "purple", "magenta", "rosa", "pink", "azul", "blue", "vermelho", "red", "branco", "white"],
+    neutral: ["branco", "white", "preto", "black", "cinza", "grey", "gray", "marrom", "brown", "ocre", "ochre", "siena", "sepia"],
+    neon: ["fluor", "fluorescente", "neon", "branco", "white", "amarelo", "yellow", "verde", "green", "magenta", "rosa", "pink", "ciano", "cyan", "laranja", "orange"],
+    general: [],
+  };
+
+  const allowedTerms = termMap[intent] ?? [];
+  const byIntent = allowedTerms.length ? poolBase.filter((paint) => paintMatchesTerms(paint, allowedTerms)) : poolBase;
+  const specialIntentPool = intent === "neon" ? mixable.filter((paint) => paintMatchesTerms(paint, termMap.neon)) : [];
+
+  return (specialIntentPool.length ? specialIntentPool : byIntent.length ? byIntent : poolBase).slice(0, 48);
+};
+
 const closestBrandPaint = (brandId: string, targetHex: string, line?: string) => {
   const brand = paintBrands.find((entry) => entry.id === brandId) ?? paintBrands[0];
   const pool = line && line !== "todas" ? brand.paints.filter((paint) => paint.line === line) : brand.paints;
@@ -412,6 +449,27 @@ const brandLineOptions = (brandId: string) => {
 const formatParts = (parts: number) => Number(parts.toFixed(2)).toLocaleString("pt-BR");
 
 const isValidHexInput = (value: string) => /^#?[0-9a-fA-F]{3}$|^#?[0-9a-fA-F]{6}$/.test(value.trim());
+
+const targetLooksLikeSkin = (hex: string) => {
+  const hsl = rgbToHsl(hexToRgb(hex));
+  if (hsl.h < 6 || hsl.h > 38 || hsl.l < 38 || hsl.l > 88 || hsl.s < 12) return false;
+  return hsl.l >= 62 ? hsl.s <= 84 : hsl.s <= 58;
+};
+
+const targetIntent = (hex: string, sourceText = "") => {
+  const hsl = rgbToHsl(hexToRgb(hex));
+  const text = normalizeText(sourceText);
+  if (/(pele|skin|flesh|carne|rosto|face)/.test(text) || targetLooksLikeSkin(hex)) return "skin";
+  if (/(neon|fluor|fluorescente|energia|plasma|osl)/.test(text) || (hsl.s > 88 && hsl.l > 58 && !targetLooksLikeSkin(hex))) return "neon";
+  if (hsl.h >= 42 && hsl.h <= 76) return "yellow";
+  if (hsl.h <= 18 || hsl.h >= 342) return "red";
+  if (hsl.h > 18 && hsl.h < 42) return "orange";
+  if (hsl.h >= 80 && hsl.h <= 165) return "green";
+  if (hsl.h >= 185 && hsl.h <= 260) return "blue";
+  if (hsl.h > 260 && hsl.h < 342) return "purple";
+  if (hsl.s < 12) return "neutral";
+  return "general";
+};
 
 const primerAdviceForColor = (hex: string, paints: Array<Pick<BrandPaint, "family" | "name" | "type">> = []) => {
   const hsl = rgbToHsl(hexToRgb(hex));
@@ -431,10 +489,29 @@ const primerAdviceForColor = (hex: string, paints: Array<Pick<BrandPaint, "famil
     };
   }
 
+  if (families.includes("pele") || families.includes("flesh") || targetLooksLikeSkin(hex)) {
+    if (hsl.l >= 62) {
+      return {
+        base: "Magenta ou rosa quente, com zenital branco/off-white",
+        why: "Magenta aquece o subtom da pele e evita que a pele clara fique cinza, morta ou bege demais.",
+      };
+    }
+    if (hsl.l >= 38) {
+      return {
+        base: "Marrom avermelhado, rosa queimado ou vermelho óxido",
+        why: "Cria profundidade natural para pele morena/bronzeada e facilita sombras quentes.",
+      };
+    }
+    return {
+      base: "Roxo escuro ou marrom avermelhado com luz zenital",
+      why: "Ajuda pele escura a manter contraste sem depender de preto puro.",
+    };
+  }
+
   if (hsl.h >= 42 && hsl.h <= 72 && hsl.s > 35) {
     return {
-      base: "Rosa claro, bege ou marfim",
-      why: "Ajuda amarelos a cobrir melhor e evita aparência esverdeada.",
+      base: "Rosa/magenta com luz branca por cima",
+      why: "Rosa cria sombra alaranjada sob amarelo e branco mantém a parte iluminada viva.",
     };
   }
 
@@ -442,13 +519,6 @@ const primerAdviceForColor = (hex: string, paints: Array<Pick<BrandPaint, "famil
     return {
       base: "Rosa claro ou vermelho escuro",
       why: "Rosa deixa vermelho vivo; vermelho escuro deixa o resultado mais profundo.",
-    };
-  }
-
-  if (families.includes("pele")) {
-    return {
-      base: "Rosa claro, bege quente ou marrom avermelhado",
-      why: "Cria naturalidade e reduz a quantidade de camadas em tons de pele.",
     };
   }
 
@@ -472,6 +542,40 @@ const primerAdviceForColor = (hex: string, paints: Array<Pick<BrandPaint, "famil
   };
 };
 
+const recipePracticalPenalty = (parts: Array<{ paint: BrandPaint; parts: number }>, targetHex: string, sourceColors: MixerColor[] = []) => {
+  const sourceText = sourceColors.map((color) => color.name).join(" ");
+  const intent = targetIntent(targetHex, sourceText);
+  const hsl = rgbToHsl(hexToRgb(targetHex));
+  const recipeText = normalizeText(parts.map((part) => `${part.paint.family} ${part.paint.name} ${part.paint.type}`).join(" "));
+  let penalty = 0;
+
+  if (intent !== "neon" && /(fluor|fluorescente|neon|metal|wash|shade|contrast|speedpaint|xpress|ink|clear|transparent|candy)/.test(recipeText)) {
+    penalty += 0.35;
+  }
+
+  if (["yellow", "orange", "red"].includes(intent) && hsl.s > 45 && hsl.l < 74 && /(branco|white)/.test(recipeText)) {
+    penalty += 0.06;
+  }
+
+  if (intent === "orange" && !/(laranja|orange|amarelo|yellow|ocre|ochre)/.test(recipeText)) {
+    penalty += 0.12;
+  }
+
+  if (intent === "yellow" && !/(amarelo|yellow|ocre|ochre)/.test(recipeText)) {
+    penalty += 0.14;
+  }
+
+  if (intent === "skin" && !/(pele|flesh|skin|rosa|pink|magenta|marrom|brown|ocre|ochre|branco|white|siena|sepia)/.test(recipeText)) {
+    penalty += 0.16;
+  }
+
+  if (parts.length > 1 && new Set(parts.map((part) => part.paint.id)).size !== parts.length) {
+    penalty += 0.2;
+  }
+
+  return penalty;
+};
+
 const paintPartToMixerColor = (paint: BrandPaint, parts: number, brand?: (typeof paintBrands)[number]): MixerColor => ({
   id: `${paint.id}-${parts}`,
   brandId: brand?.id,
@@ -489,10 +593,9 @@ const paintPartToMixerColor = (paint: BrandPaint, parts: number, brand?: (typeof
 const mixBrandParts = (parts: Array<{ paint: BrandPaint; parts: number }>, brand?: (typeof paintBrands)[number]) =>
   mixColors(parts.map((part) => paintPartToMixerColor(part.paint, part.parts, brand)), "perceptual");
 
-const suggestBrandMix = (paints: BrandPaint[], targetHex: string, brand?: (typeof paintBrands)[number]): BrandMixSuggestion | null => {
+const suggestBrandMix = (paints: BrandPaint[], targetHex: string, brand?: (typeof paintBrands)[number], sourceColors: MixerColor[] = []): BrandMixSuggestion | null => {
   if (!paints.length) return null;
-  const mixablePaints = paints.filter(isMixablePaint);
-  const candidates = (mixablePaints.length ? mixablePaints : paints).slice(0, 48);
+  const candidates = practicalPaintPool(paints, targetHex, sourceColors);
   const ratios = [
     [1, 1],
     [2, 1],
@@ -504,7 +607,7 @@ const suggestBrandMix = (paints: BrandPaint[], targetHex: string, brand?: (typeo
   ];
   const pushCandidate = (parts: Array<{ paint: BrandPaint; parts: number }>, currentBest: BrandMixSuggestion | null) => {
     const resultHex = mixBrandParts(parts, brand);
-    const score = colorDistance(resultHex, targetHex);
+    const score = colorDistance(resultHex, targetHex) + recipePracticalPenalty(parts, targetHex, sourceColors);
     if (!currentBest || score < currentBest.score) return { targetHex, resultHex, score, parts };
     return currentBest;
   };
@@ -644,7 +747,7 @@ function MixerPartsSummary({
   selectedBrandPaints: BrandPaint[];
 }) {
   const activeColors = colors.filter((color) => color.parts > 0);
-  const brandSuggestion = suggestBrandMix(selectedBrandPaints, resultHex, selectedBrand);
+  const brandSuggestion = suggestBrandMix(selectedBrandPaints, resultHex, selectedBrand, activeColors);
   const suggestedParts = brandSuggestion?.parts ?? [];
   const primerAdvice = primerAdviceForColor(
     resultHex,
@@ -2040,6 +2143,35 @@ function PhotoColorPickerSection({
   );
 }
 
+function BenchRulesCard() {
+  const rules = [
+    ["Pele clara", "Magenta/rosa quente + zenital branco", "Aplique pele em camadas finas por cima; sombreie com magenta, marrom ou roxo."],
+    ["Pele morena", "Marrom avermelhado ou vermelho óxido", "Constrói profundidade sem acinzentar. Luz com bege/marfim em pouca quantidade."],
+    ["Pele escura", "Roxo escuro ou marrom quente + luz zenital", "Evite preto puro como sombra principal; use roxo/marrom para volume."],
+    ["Amarelo", "Rosa/magenta + branco por cima", "Dá sombra alaranjada bonita e reduz a quantidade de camadas de amarelo."],
+    ["Metal/candy", "Preto brilhante + prata lisa", "A profundidade vem da base lisa; candy precisa de camadas transparentes e gloss."],
+    ["Fluorescente", "Branco puro", "Neon perde força sobre primer escuro. Use várias camadas finas."],
+  ];
+
+  return (
+    <section className="mb-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="mb-3 flex items-center gap-2">
+        <PaintBucket className="h-5 w-5 text-teal-500" />
+        <h3 className="text-lg font-black text-slate-950 dark:text-white">Base real recomendada</h3>
+      </div>
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+        {rules.map(([subject, base, tip]) => (
+          <div key={subject} className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
+            <div className="text-sm font-black text-slate-950 dark:text-white">{subject}</div>
+            <div className="mt-1 text-sm font-bold text-teal-700 dark:text-teal-300">{base}</div>
+            <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{tip}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function MixerSection(props: {
   database: PaintDatabase;
   selectedBrandId: string;
@@ -2225,6 +2357,8 @@ function MixerSection(props: {
           </div>
         </details>
       </section>
+
+      <BenchRulesCard />
 
       <PhotoColorPickerSection
         selectedBrand={selectedBrand}
