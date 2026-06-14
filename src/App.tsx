@@ -392,6 +392,11 @@ const colorDistance = (a: string, b: string) => {
   return rgbDistance * 0.58 + hueDistance * 0.22 + saturationDistance * 0.1 + lightnessDistance * 0.1;
 };
 
+const isMixablePaint = (paint: BrandPaint) => {
+  const text = normalizeText(`${paint.family} ${paint.name} ${paint.line} ${paint.type}`);
+  return !["primer", "verniz", "varnish", "auxiliar", "medium", "fixador"].some((term) => text.includes(term));
+};
+
 const closestBrandPaint = (brandId: string, targetHex: string, line?: string) => {
   const brand = paintBrands.find((entry) => entry.id === brandId) ?? paintBrands[0];
   const pool = line && line !== "todas" ? brand.paints.filter((paint) => paint.line === line) : brand.paints;
@@ -486,7 +491,8 @@ const mixBrandParts = (parts: Array<{ paint: BrandPaint; parts: number }>, brand
 
 const suggestBrandMix = (paints: BrandPaint[], targetHex: string, brand?: (typeof paintBrands)[number]): BrandMixSuggestion | null => {
   if (!paints.length) return null;
-  const candidates = paints.slice(0, 48);
+  const mixablePaints = paints.filter(isMixablePaint);
+  const candidates = (mixablePaints.length ? mixablePaints : paints).slice(0, 48);
   const ratios = [
     [1, 1],
     [2, 1],
@@ -626,47 +632,93 @@ function ColorSwatch({ hex, label, large = false }: { hex: string; label?: strin
   );
 }
 
-function MixerPartsSummary({ colors, resultHex }: { colors: MixerColor[]; resultHex: string }) {
+function MixerPartsSummary({
+  colors,
+  resultHex,
+  selectedBrand,
+  selectedBrandPaints,
+}: {
+  colors: MixerColor[];
+  resultHex: string;
+  selectedBrand: (typeof paintBrands)[number];
+  selectedBrandPaints: BrandPaint[];
+}) {
   const activeColors = colors.filter((color) => color.parts > 0);
+  const brandSuggestion = suggestBrandMix(selectedBrandPaints, resultHex, selectedBrand);
+  const suggestedParts = brandSuggestion?.parts ?? [];
   const primerAdvice = primerAdviceForColor(
     resultHex,
-    activeColors.map((color) => ({ family: color.name, name: color.name, type: color.paintType })),
+    suggestedParts.length ? suggestedParts.map((part) => part.paint) : activeColors.map((color) => ({ family: color.name, name: color.name, type: color.paintType })),
   );
 
-  if (!activeColors.length) return null;
+  if (!activeColors.length && !brandSuggestion) return null;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="text-xs font-black uppercase tracking-wide text-teal-700 dark:text-teal-300">Receita atual</div>
-          <h4 className="text-base font-black text-slate-950 dark:text-white">Tintas e proporções</h4>
+          <div className="text-xs font-black uppercase tracking-wide text-teal-700 dark:text-teal-300">Tintas da marca escolhida</div>
+          <h4 className="text-base font-black text-slate-950 dark:text-white">Use estas tintas da {selectedBrand.name}</h4>
         </div>
         <span className="rounded-md bg-slate-200 px-2 py-1 text-xs font-black text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-          {activeColors.length} cor{activeColors.length > 1 ? "es" : ""}
+          {suggestedParts.length || activeColors.length} tinta{(suggestedParts.length || activeColors.length) > 1 ? "s" : ""}
         </span>
       </div>
       <div className="space-y-2">
-        {activeColors.map((color) => (
-          <div key={color.id} className="grid grid-cols-[42px_1fr_auto] items-center gap-3 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900">
-            <span className="h-10 w-10 rounded-md border border-white/20 shadow-inner" style={{ background: color.hex }} />
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-black text-slate-950 dark:text-white">{color.name}</span>
-              <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
-                {color.brandName ? `${color.brandName} / ${color.line ?? "linha"}` : color.paintType}
-              </span>
-            </span>
-            <span className="rounded-md bg-teal-100 px-2 py-1 text-sm font-black text-teal-950 dark:bg-teal-500/20 dark:text-teal-100">
-              {formatParts(color.parts)}x
-            </span>
-          </div>
-        ))}
+        {suggestedParts.length
+          ? suggestedParts.map((part) => (
+              <div key={`${part.paint.id}-${part.parts}`} className="grid grid-cols-[42px_1fr_auto] items-center gap-3 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900">
+                <span className="h-10 w-10 rounded-md border border-white/20 shadow-inner" style={{ background: part.paint.hex }} />
+                <span className="min-w-0">
+                  <span className="block text-[10px] font-black uppercase tracking-wide text-teal-700 dark:text-teal-300">Nome da tinta</span>
+                  <span className="block truncate text-sm font-black text-slate-950 dark:text-white">{part.paint.name}</span>
+                  <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                    {part.paint.line} · {part.paint.type}
+                  </span>
+                </span>
+                <span className="rounded-md bg-teal-100 px-2 py-1 text-sm font-black text-teal-950 dark:bg-teal-500/20 dark:text-teal-100">
+                  {formatParts(part.parts)}x
+                </span>
+              </div>
+            ))
+          : activeColors.map((color) => (
+              <div key={color.id} className="grid grid-cols-[42px_1fr_auto] items-center gap-3 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900">
+                <span className="h-10 w-10 rounded-md border border-white/20 shadow-inner" style={{ background: color.hex }} />
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-black text-slate-950 dark:text-white">{color.name}</span>
+                  <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                    {color.brandName ? `${color.brandName} / ${color.line ?? "linha"}` : color.paintType}
+                  </span>
+                </span>
+                <span className="rounded-md bg-teal-100 px-2 py-1 text-sm font-black text-teal-950 dark:bg-teal-500/20 dark:text-teal-100">
+                  {formatParts(color.parts)}x
+                </span>
+              </div>
+            ))}
       </div>
+      {brandSuggestion ? (
+        <div className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+          Previsão da mistura: <strong className="font-mono uppercase">{brandSuggestion.resultHex}</strong>. Ajuste fino pode exigir uma microgota de branco, pele, marrom ou vermelho conforme o teste real.
+        </div>
+      ) : null}
       <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm leading-6 text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
         <strong>Base sugerida:</strong> {primerAdvice.base}
         <br />
         {primerAdvice.why}
       </div>
+      {activeColors.some((color) => !color.brandName) ? (
+        <details className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+          <summary className="cursor-pointer text-xs font-bold text-slate-600 dark:text-slate-300">Ver receita genérica original</summary>
+          <div className="mt-2 space-y-2">
+            {activeColors.map((color) => (
+              <div key={color.id} className="flex items-center justify-between gap-3 text-sm text-slate-600 dark:text-slate-300">
+                <span className="min-w-0 truncate">{color.name}</span>
+                <strong>{formatParts(color.parts)}x</strong>
+              </div>
+            ))}
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -2424,7 +2476,12 @@ function MixerSection(props: {
           </div>
 
           <div className="mt-3">
-            <MixerPartsSummary colors={mixerColors} resultHex={calibratedHex} />
+            <MixerPartsSummary
+              colors={mixerColors}
+              resultHex={calibratedHex}
+              selectedBrand={selectedBrand}
+              selectedBrandPaints={selectedBrandPaints}
+            />
           </div>
 
           <details className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
