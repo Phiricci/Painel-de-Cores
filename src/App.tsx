@@ -770,6 +770,29 @@ function PaintRecipeRow({
   );
 }
 
+function QuickPaintRecipeBanner({
+  suggestion,
+  selectedBrand,
+}: {
+  suggestion: BrandMixSuggestion | null;
+  selectedBrand: (typeof paintBrands)[number];
+}) {
+  if (!suggestion?.parts.length) return null;
+
+  return (
+    <div className="mb-3 rounded-lg border-2 border-teal-400 bg-teal-50 p-3 dark:border-teal-500 dark:bg-teal-500/10">
+      <div className="mb-2 text-xs font-black uppercase tracking-wide text-teal-800 dark:text-teal-200">
+        Tintas para usar agora
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        {suggestion.parts.map((part, index) => (
+          <PaintRecipeRow key={`top-${part.paint.id}-${part.parts}`} part={part} brand={selectedBrand} index={index} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MixerPartsSummary({
   colors,
   resultHex,
@@ -2322,6 +2345,10 @@ function MixerSection(props: {
   const colorB = mixerColors[1]?.hex ?? "#ffffff";
   const primerVariations = primerOptions.filter((primer) => primer.id !== "custom").slice(0, 6);
   const layerSamples = [1, 2, 3].map((layers) => ({ layers, hex: applyPrimer(predictedHex, primerHex, mixerOpacity, layers) }));
+  const topBrandSuggestion = useMemo(
+    () => suggestBrandMix(selectedBrandPaints, calibratedHex, selectedBrand, mixerColors),
+    [calibratedHex, mixerColors, selectedBrand, selectedBrandPaints],
+  );
   const firstHsl = rgbToHsl(hexToRgb(mixerColors[0]?.hex ?? predictedHex));
 
   return (
@@ -2638,6 +2665,8 @@ function MixerSection(props: {
               </div>
             </details>
           </div>
+
+          <QuickPaintRecipeBanner suggestion={topBrandSuggestion} selectedBrand={selectedBrand} />
 
           <div className="grid gap-3 md:grid-cols-[1fr_1fr]">
             <div>
