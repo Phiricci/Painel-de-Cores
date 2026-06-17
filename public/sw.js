@@ -1,4 +1,4 @@
-const CACHE_NAME = "solitario-cores-3d-v2";
+const CACHE_NAME = "solitario-cores-3d-v4";
 const APP_SHELL = ["/manifest.webmanifest", "/icon.svg", "/og-image.svg"];
 
 self.addEventListener("install", (event) => {
@@ -47,7 +47,7 @@ const cacheFirst = async (request) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
-  if (event.request.mode === "navigate" || event.request.destination === "document") {
+  if (event.request.mode === "navigate" || ["document", "script", "style", "worker", "manifest"].includes(event.request.destination)) {
     event.respondWith(networkFirst(event.request));
     return;
   }

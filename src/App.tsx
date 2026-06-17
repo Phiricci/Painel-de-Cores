@@ -152,7 +152,7 @@ const primarySections: Array<{ id: SectionId; label: string; icon: LucideIcon }>
   { id: "mixer", label: "Criar cor", icon: Pipette },
   { id: "recipes", label: "Receitas", icon: BookOpen },
   { id: "mine", label: "Salvos", icon: Save },
-  { id: "settings", label: "Mais", icon: Settings },
+  { id: "guide", label: "Guia", icon: Settings },
 ];
 
 const sortedPaintBrands = [...paintBrands].sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
@@ -574,6 +574,10 @@ const recipePracticalPenalty = (parts: Array<{ paint: BrandPaint; parts: number 
     penalty += 0.16;
   }
 
+  if (intent === "skin" && !/(pele|flesh|skin)/.test(recipeText)) {
+    penalty += 0.2;
+  }
+
   if (parts.length > 1 && new Set(parts.map((part) => part.paint.id)).size !== parts.length) {
     penalty += 0.2;
   }
@@ -784,6 +788,9 @@ function QuickPaintRecipeBanner({
       <div className="mb-2 text-xs font-black uppercase tracking-wide text-teal-800 dark:text-teal-200">
         Tintas para usar agora
       </div>
+      <p className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-200">
+        Misture em partes ou gotas. Exemplo: 3x = 3 gotas, 1x = 1 gota.
+      </p>
       <div className="grid gap-2 md:grid-cols-2">
         {suggestion.parts.map((part, index) => (
           <PaintRecipeRow key={`top-${part.paint.id}-${part.parts}`} part={part} brand={selectedBrand} index={index} />
@@ -2022,6 +2029,11 @@ function PhotoColorPickerSection({
     setPhotoSuggestion(suggestBrandMix(selectedBrandPaints, photoTargetHex, selectedBrand));
   }, [photoTargetHex, selectedBrand, selectedBrandPaints]);
 
+  useEffect(() => {
+    if (!photoSuggestion) return;
+    applyPhotoMixSuggestion(photoSuggestion);
+  }, [photoSuggestion]);
+
   const setTargetHex = (hex: string) => {
     const normalized = normalizeHex(hex);
     setPhotoTargetHex(normalized);
@@ -2137,10 +2149,10 @@ function PhotoColorPickerSection({
             {photoUrl ? (
               <canvas ref={canvasRef} onClick={handlePickColor} className="block max-h-[420px] w-full cursor-crosshair object-contain" title="Clique na cor que deseja copiar" />
             ) : (
-              <div className="flex min-h-52 flex-col items-center justify-center p-6 text-center text-slate-500 dark:text-slate-400">
-                <ImageIcon className="mb-3 h-10 w-10" />
-                <div className="text-sm font-bold">Foto opcional.</div>
-                <div className="mt-1 text-xs">Se carregar uma imagem, clique na área da cor que deseja copiar.</div>
+              <div className="flex min-h-28 flex-col items-center justify-center p-4 text-center text-slate-500 dark:text-slate-400">
+                <ImageIcon className="mb-2 h-7 w-7" />
+                <div className="text-sm font-bold">Foto opcional</div>
+                <div className="mt-1 text-xs">Carregue uma imagem e clique na cor desejada.</div>
               </div>
             )}
           </div>
@@ -2154,6 +2166,13 @@ function PhotoColorPickerSection({
               {photoSuggestion ? (
                 <>
                   <div className="rounded-lg border border-teal-300 bg-teal-50 p-3 dark:border-teal-500/30 dark:bg-teal-500/10">
+                    <div className="mb-2 text-xs font-black uppercase tracking-wide text-teal-700 dark:text-teal-200">Cor aplicada</div>
+                    <ColorSwatch hex={photoTargetHex} label="Cor final escolhida" />
+                    <p className="mt-2 text-sm leading-6 text-slate-700 dark:text-slate-200">
+                      Receita atualizada abaixo com tintas da {selectedBrand.name}. Similaridade aproximada: <strong>{accuracy}%</strong>.
+                    </p>
+                  </div>
+                  <div className="hidden">
                     <div className="mb-3 flex items-start justify-between gap-3">
                       <div>
                         <div className="text-xs font-black uppercase tracking-wide text-teal-700 dark:text-teal-200">Receita rápida</div>
@@ -2192,7 +2211,7 @@ function PhotoColorPickerSection({
                       </div>
                     ) : null}
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="hidden">
                     <IconButton icon={FlaskConical} label="Usar esta receita" onClick={() => applyPhotoMixSuggestion(photoSuggestion)} />
                     <IconButton icon={Copy} label="Copiar" onClick={copyPhotoRecipe} />
                   </div>
@@ -2349,32 +2368,47 @@ function MixerSection(props: {
     () => suggestBrandMix(selectedBrandPaints, calibratedHex, selectedBrand, mixerColors),
     [calibratedHex, mixerColors, selectedBrand, selectedBrandPaints],
   );
+  const topPrimerAdvice = useMemo(
+    () => primerAdviceForColor(calibratedHex, topBrandSuggestion?.parts.map((part) => part.paint) ?? []),
+    [calibratedHex, topBrandSuggestion],
+  );
+  const topRecipeText = useMemo(() => {
+    if (!topBrandSuggestion?.parts.length) {
+      return `${selectedBrand.name}: nenhuma receita encontrada para ${calibratedHex}.`;
+    }
+    const parts = topBrandSuggestion.parts
+      .map((part) => `${formatParts(part.parts)}x ${part.paint.name} (${part.paint.line})`)
+      .join(" + ");
+    return `${selectedBrand.name}: ${parts}. Base recomendada: ${topPrimerAdvice.base}. Alvo ${topBrandSuggestion.targetHex}; previsto ${topBrandSuggestion.resultHex}. Resultado aproximado: teste antes na paleta ou em peça de descarte.`;
+  }, [calibratedHex, selectedBrand.name, topBrandSuggestion, topPrimerAdvice.base]);
+  const topRecipeAccuracy = topBrandSuggestion ? Math.max(0, Math.round((1 - Math.min(topBrandSuggestion.score, 1)) * 100)) : 0;
+  const copyTopRecipe = () => copyToClipboard(topRecipeText);
   const firstHsl = rgbToHsl(hexToRgb(mixerColors[0]?.hex ?? predictedHex));
 
   return (
     <div>
       <SectionTitle
         icon={Pipette}
-        title="Criar cor"
-        subtitle="Escolha a marca, pegue uma cor de foto ou use ajuste manual só se precisar."
+        title="Receita rápida"
+        subtitle="Escolha marca e cor final. O painel mostra tintas, proporção e base indicada."
       />
 
-      <div className="mb-4 rounded-lg border border-amber-300/60 bg-amber-100 p-4 text-sm leading-6 text-amber-950 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
+      <div className="hidden">
         <strong>Receita aproximada.</strong> Use como ponto de partida e teste em paleta, suporte de resina ou peça de descarte antes do modelo final.
       </div>
 
       <section className="mb-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-lg font-black text-slate-950 dark:text-white">1. Escolha a marca</h3>
+            <h3 className="text-lg font-black text-slate-950 dark:text-white">1. Marca</h3>
             <p className="text-sm text-slate-600 dark:text-slate-300">
               A receita da foto e as sugestões vão usar apenas tintas dessa marca/linha.
             </p>
           </div>
-          <span className="rounded-md bg-teal-100 px-2 py-1 text-xs font-black uppercase text-teal-900 dark:bg-teal-500/20 dark:text-teal-100">plug and play</span>
+          <span className="hidden">plug and play</span>
         </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          <div>
+        <div className="grid gap-3">
+          <div className="max-w-xl">
             <FieldLabel>Marca alvo</FieldLabel>
             <select
               value={selectedBrandId}
@@ -2391,7 +2425,7 @@ function MixerSection(props: {
               ))}
             </select>
           </div>
-          <div>
+          <div className="hidden">
             <FieldLabel>Linha</FieldLabel>
             <select value={selectedBrandLine} onChange={(event) => setSelectedBrandLine(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
               {brandLineOptions(selectedBrandId).map((line) => (
@@ -2413,7 +2447,7 @@ function MixerSection(props: {
             </div>
           </div>
         </div>
-        <details className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+        <details className="hidden">
           <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-200">Ajustes avançados de marca</summary>
           <div className="mt-3 grid gap-3 md:grid-cols-[auto_1fr]">
             <IconButton icon={PaintBucket} label="Converter mistura manual para marca" onClick={convertMixerToBrand} />
@@ -2432,7 +2466,9 @@ function MixerSection(props: {
         </details>
       </section>
 
-      <BenchRulesCard />
+      <div className="hidden">
+        <BenchRulesCard />
+      </div>
 
       <PhotoColorPickerSection
         selectedBrand={selectedBrand}
@@ -2643,10 +2679,15 @@ function MixerSection(props: {
         <section ref={exportRef} id="recipe-export-card" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h3 className="text-lg font-black text-slate-950 dark:text-white">Resultado final</h3>
-              <p className="text-sm text-slate-600 dark:text-slate-300">Cor atual pronta para copiar, salvar ou ajustar rapidamente.</p>
+              <h3 className="text-lg font-black text-slate-950 dark:text-white">3. Misture estas tintas</h3>
+              <p className="text-sm text-slate-600 dark:text-slate-300">Nomes, proporção e base para chegar perto da cor escolhida.</p>
             </div>
-            <details className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-800">
+            {topBrandSuggestion ? (
+              <span className="rounded-md bg-teal-100 px-2 py-1 text-xs font-black text-teal-900 dark:bg-teal-500/20 dark:text-teal-100">
+                {topRecipeAccuracy}% similar
+              </span>
+            ) : null}
+            <details className="hidden">
               <summary className="cursor-pointer text-xs font-black uppercase text-slate-600 dark:text-slate-300">Modo avançado</summary>
               <div className="mt-2 flex flex-wrap gap-2">
               {(["visual", "perceptual", "subtractive"] as MixMode[]).map((mode) => (
@@ -2668,7 +2709,20 @@ function MixerSection(props: {
 
           <QuickPaintRecipeBanner suggestion={topBrandSuggestion} selectedBrand={selectedBrand} />
 
-          <div className="grid gap-3 md:grid-cols-[1fr_1fr]">
+          <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm leading-6 text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+            <strong>Base recomendada:</strong> {topPrimerAdvice.base}
+            <br />
+            {topPrimerAdvice.why}
+          </div>
+
+          <div className="mb-3 flex flex-wrap gap-2">
+            <IconButton icon={Copy} label="Copiar receita" onClick={() => void copyTopRecipe()} />
+            <IconButton icon={Save} label="Salvar" onClick={saveRecipe} />
+            <IconButton icon={Link} label="Compartilhar" onClick={shareCurrentRecipe} />
+            <IconButton icon={ImageIcon} label="PNG" onClick={exportCurrentPng} />
+          </div>
+
+          <div className="hidden">
             <div>
               <ColorSwatch hex={calibratedHex} label="Resultado" large />
               <input
@@ -2685,7 +2739,7 @@ function MixerSection(props: {
             </div>
           </div>
 
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
+          <div className="hidden">
             <div className="text-xs font-black uppercase tracking-wide text-teal-700 dark:text-teal-300">Cor pronta mais próxima</div>
             <div className="mt-1 text-base font-black text-slate-950 dark:text-white">
               {selectedBrand.name} - {brandEquivalentResult.name}
@@ -2695,7 +2749,7 @@ function MixerSection(props: {
             </div>
           </div>
 
-          <div className="mt-3">
+          <div className="hidden">
             <MixerPartsSummary
               colors={mixerColors}
               resultHex={calibratedHex}
@@ -2704,14 +2758,14 @@ function MixerSection(props: {
             />
           </div>
 
-          <details className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+          <details className="hidden">
             <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-200">Códigos HEX/RGB/HSL</summary>
             <div className="mt-3">
               <ColorCodePanel hex={calibratedHex} label="Códigos e contraste do resultado calibrado" />
             </div>
           </details>
 
-          <details className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+          <details className="hidden">
             <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-200">Variações e primer</summary>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
@@ -2756,21 +2810,21 @@ function MixerSection(props: {
           </details>
 
           {quickPreview ? (
-            <div className="mt-3 rounded-lg border border-teal-300 bg-teal-50 p-3 dark:border-teal-500/30 dark:bg-teal-500/10">
+            <div className="hidden">
               <div className="mb-2 text-sm font-bold text-teal-800 dark:text-teal-100">{quickPreview.label}</div>
               <ColorSwatch hex={quickPreview.hex} label="Prévia gerada" />
             </div>
           ) : null}
 
           {matchedCalibration ? (
-            <div className="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-100">
+            <div className="hidden">
               Calibração aplicada: {matchedCalibration.brand} / {matchedCalibration.line}, {matchedCalibration.layers} camadas sobre {matchedCalibration.primer}.
             </div>
           ) : null}
         </section>
       </div>
 
-      <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <section className="hidden">
         <div className="mb-3 flex items-center gap-2">
           <Save className="h-5 w-5 text-teal-500" />
           <h3 className="text-lg font-black">Salvar e compartilhar</h3>
